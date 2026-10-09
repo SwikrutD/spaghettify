@@ -122,5 +122,6 @@ Page views are automatic. Custom events (sent only on the live hostname, see `sr
 | --- | --- | --- |
 | `run-start` | Play from the title screen or Play again | `from` (`title` or `restart`) |
 | `run-end` | The hole evaporates | `band` (score range), `tier`, `seconds`, `eaten`, `newBest` |
+| `share` | The share card was shared (share sheet) or saved (download) from the score screen | `method` (`share` or `download`), `band`, `tier` |
 
 No cookies, no IDs and never the nickname.

@@ -53,6 +53,8 @@ interface Debug {
     pixelRatio: number;
   };
   readPixel(x: number, y: number): Promise<number[]>;
+  snapshot: { image: HTMLCanvasElement | null; taken: number };
+  share: { card: HTMLCanvasElement | null };
 }
 declare global {
   interface Window {
@@ -564,6 +566,101 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   expect(errors).toEqual([]);
 });
 
+/** Eats one object (a photo for the share card), then starves the hole until the score screen shows. */
+async function playShortRun(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const d = window.__spaghettify;
+    const target = d.prey.objects.find((o) => o.state === 'alive' && d.prey.isEdible(o));
+    if (!target) throw new Error('no edible prey in the pool');
+    d.player.position.x = target.position.x;
+    d.player.position.z = target.position.z;
+    while (d.player.eatenCount < 1) await new Promise(requestAnimationFrame);
+    while (d.snapshot.taken < 1) await new Promise(requestAnimationFrame);
+    d.prey.objects.forEach((o) => (o.position.x += 100000));
+    d.hunger.idle = 100;
+    d.player.mass = d.hunger.floorMass * 1.01;
+  });
+  await expect(page.getByTestId('score-screen')).toBeVisible({ timeout: 30_000 });
+}
+
+/** Mean brightness and spread of a canvas, to tell a drawn card from a blank one. */
+function canvasStats(): { width: number; height: number; mean: number; spread: number; leftBright: number } {
+  const c = window.__spaghettify.share.card!;
+  const data = c.getContext('2d')!.getImageData(0, 0, c.width, c.height).data;
+  let sum = 0;
+  let sq = 0;
+  let leftBright = 0;
+  const n = data.length / 4;
+  for (let i = 0; i < data.length; i += 4) {
+    const v = (data[i] + data[i + 1] + data[i + 2]) / 3;
+    sum += v;
+    sq += v * v;
+    // Text on the left panel: bright pixels in the left half.
+    if ((i / 4) % c.width < c.width / 2 && v > 200) leftBright++;
+  }
+  const mean = sum / n;
+  return { width: c.width, height: c.height, mean, spread: Math.sqrt(sq / n - mean * mean), leftBright };
+}
+
+test('share card: the score screen renders a card with the run photo and SAVE CARD downloads it as a PNG', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 480, height: 270 });
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+  // Force the fallback path even where the browser has Web Share.
+  await page.addInitScript(() => {
+    Object.defineProperty(Navigator.prototype, 'share', { value: undefined, configurable: true });
+    Object.defineProperty(Navigator.prototype, 'canShare', { value: undefined, configurable: true });
+  });
+
+  await page.goto('/');
+  await page.mouse.move(240, 135);
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
+  await playShortRun(page);
+
+  // The run photo is a real frame (not black) and the card has the photo and the text drawn.
+  const photo = await page.evaluate(() => {
+    const img = window.__spaghettify.snapshot.image!;
+    const data = img.getContext('2d')!.getImageData(0, 0, img.width, img.height).data;
+    let lit = 0;
+    for (let i = 0; i < data.length; i += 4) if (data[i] + data[i + 1] + data[i + 2] > 60) lit++;
+    return { w: img.width, h: img.height, lit };
+  });
+  expect(photo.w).toBeGreaterThan(100);
+  expect(photo.lit).toBeGreaterThan(50);
+  const card = await page.evaluate(canvasStats);
+  expect(card.width).toBe(1200);
+  expect(card.height).toBe(675);
+  expect(card.spread).toBeGreaterThan(10);
+  expect(card.leftBright).toBeGreaterThan(2000);
+
+  const button = page.getByTestId('share');
+  await expect(button).toHaveText('SAVE CARD');
+  const [download] = await Promise.all([page.waitForEvent('download'), button.click()]);
+  expect(download.suggestedFilename()).toMatch(/^spaghettify-\d+\.png$/);
+  const score = Number((await page.getByTestId('score').textContent())!.replace(/,/g, ''));
+  expect(download.suggestedFilename()).toBe(`spaghettify-${score}.png`);
+  const file = await download.path();
+  const fs = await import('node:fs');
+  const png = fs.readFileSync(file);
+  expect(png.length).toBeGreaterThan(20_000);
+  // PNG signature and the IHDR size match the card.
+  expect(png.subarray(0, 8).toString('hex')).toBe('89504e470d0a1a0a');
+  expect(png.readUInt32BE(16)).toBe(1200);
+  expect(png.readUInt32BE(20)).toBe(675);
+  await expect(page.getByTestId('share-status')).toHaveText('Card saved');
+
+  // Play again clears the photo for the next run.
+  await page.getByTestId('play-again').click();
+  await page.waitForFunction(() => window.__spaghettify.hunger.phase === 'playing');
+  expect(await page.evaluate(() => window.__spaghettify.snapshot.taken)).toBe(0);
+  expect(errors).toEqual([]);
+});
+
 test('audio: the context is created after a click, events trigger sounds, and the mute toggle works', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => {
@@ -971,6 +1068,40 @@ test.describe('touch and gamepad', () => {
     // The pause button is a DOM button and takes a tap.
     await page.getByTestId('pause-button').tap();
     await expect(page.getByTestId('pause-menu')).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('share card: a touch device with Web Share gets the share sheet with the PNG and the game URL', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.addInitScript(() => {
+      const w = window as unknown as { shared: { name: string; type: string; size: number; text: string }[] };
+      w.shared = [];
+      Object.defineProperty(Navigator.prototype, 'canShare', { value: () => true, configurable: true });
+      Object.defineProperty(Navigator.prototype, 'share', {
+        configurable: true,
+        value: async (data: ShareData) => {
+          const f = data.files![0];
+          w.shared.push({ name: f.name, type: f.type, size: f.size, text: data.text ?? '' });
+        },
+      });
+    });
+    await page.goto('/');
+    await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+    await page.getByTestId('play').tap();
+    await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
+    await playShortRun(page);
+
+    await expect(page.getByTestId('share')).toHaveText('SHARE');
+    await page.getByTestId('share').tap();
+    await expect(page.getByTestId('share-status')).toHaveText('Shared');
+    const shared = await page.evaluate(() => (window as unknown as { shared: { name: string; type: string; size: number; text: string }[] }).shared);
+    expect(shared).toHaveLength(1);
+    expect(shared[0].type).toBe('image/png');
+    expect(shared[0].size).toBeGreaterThan(20_000);
+    expect(shared[0].name).toMatch(/^spaghettify-\d+\.png$/);
+    expect(shared[0].text).toMatch(/^You ate an? .+ https:\/\/spaghettify\.swikrut\.com$/);
     expect(errors).toEqual([]);
   });
 

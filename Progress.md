@@ -1,17 +1,17 @@
 # Progress - Spaghettify
 
 ## Next session
-Before it, the user does the manual M9 steps in `deploy/DEPLOY.md` (Umami website id, subdomain, image onto TrueNAS, TrueNAS YAML app, Cloudflare Tunnel or DNS) and plays the live site on a phone with `?perf`. If the phone settles at quality level 4 or lower, a short perf session (Opus 5.5, high) comes first.
+Before it, the user does the manual M9 steps in `deploy/DEPLOY.md` if not done yet (Umami website id, subdomain, TrueNAS, Cloudflare), plays a run on a phone and taps SHARE on the score screen to check the native share sheet and the card.
 
-Then M10 Share card [Sonnet 5.5, medium]: canvas-rendered PNG with score, biggest object eaten and a run screenshot, shared through the Web Share API with a download fallback, from the score screen.
-How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste:
+Then M11 Global leaderboard [Sonnet 5.5, high]: Fastify + SQLite server in the same compose, anonymous nickname, rate limits, score sanity caps, profanity filter; the game still plays when the server is unreachable.
+How to start: `/clear`, then `/model` (Sonnet 5.5, high), then paste:
 
 ```
-Start Milestone 10 (share card) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 11 (global leaderboard) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: from the score screen the player can share their run. Render a PNG on a canvas with the score, the biggest object eaten ("You ate X", correct names and facts only), the tier reached and a screenshot of the run (grab it from the WebGL canvas at run end, so it needs preserveDrawingBuffer or a capture right after a render). Share it with the Web Share API (files) where supported and fall back to a download. Include the game URL (spaghettify.swikrut.com unless Progress.md says the subdomain changed). Track a `share` event through `track()` in src/analytics/analytics.ts and add it to the events table in deploy/DEPLOY.md. Keep the card on theme (physics, not food) and follow the copy style rules in CLAUDE.md.
+Goal: a Fastify + SQLite backend (Node, in its own folder such as server/) packaged into the same docker-compose.yml as the static Caddy container, with Caddy proxying /api to it. Endpoints: submit a score (nickname from the title screen, score, tier, seconds, eaten count) and read the top scores (global top 50, plus the player's own rank). Light anti-cheat per CLAUDE.md: per-IP rate limits, score sanity caps derived from run time and the tier tables, a nickname profanity filter and the existing cleanNickname rules. No accounts, no replay validation. The score screen submits at run end and shows the top list and the player's rank; the title screen can show the top few. The frontend must still play fully when /api is unreachable (timeouts, no console errors). Add a `leaderboard-submit` analytics event through track() and the events table in deploy/DEPLOY.md, and update DEPLOY.md for the new container and its SQLite volume on TrueNAS.
 
-Done when: the share card renders and downloads in desktop Chrome, a Playwright test covers the share button (download fallback path, PNG non-empty, no console errors), npm run typecheck, npm run lint and npm test pass, Progress.md is updated and the work is committed.
+Done when: server unit or integration tests cover submit, top list, rate limit, caps and the filter; a Playwright test covers the score screen with a mocked /api and with /api down (no console errors); npm run typecheck, npm run lint and npm test pass; docker compose up serves both and a real submit works locally; Progress.md is updated and the work is committed.
 ```
 
 ## Milestones
@@ -27,7 +27,7 @@ Suggested model/effort in brackets.
 - [x] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest; part 1 audio, part 2 menus, part 3 touch, gamepad and juice)
 - [x] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high] (2026-10-09, awaiting a real phone test with `?perf`)
 - [x] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium] (2026-10-09, container done and tested locally; the manual TrueNAS, Cloudflare and Umami steps are the user's)
-- [ ] M10 Share card [Sonnet 5.5, medium]
+- [x] M10 Share card [Sonnet 5.5, medium] (2026-10-09, awaiting a real phone share)
 - [ ] M11 Global leaderboard (Fastify + SQLite backend in the same compose) [Sonnet 5.5, high]
 - [ ] Later: more tiers, daily seed, multiplayer
 
@@ -148,6 +148,17 @@ Suggested model/effort in brackets.
   - `playwright.config.ts`: `BASE_URL` env runs the suite against a running server instead of the dev server. All 19 tests pass on the dev server and against the container (`BASE_URL=http://localhost:8095`), so `?perf`, the debug handle and auto quality work in the production build. New smoke test: no Umami script or request off the live domain.
   - `deploy/DEPLOY.md`: Umami setup, docker save/load onto TrueNAS (no git remote yet), TrueNAS Install via YAML block (`pull_policy: never`), Cloudflare Tunnel or proxied DNS, checks, update steps and the analytics event table.
 
+- 2026-10-09 M10: share card.
+  - `src/share/RunSnapshot.ts`: the run photo. No preserveDrawingBuffer; the WebGL canvas is copied into a 2D canvas (long side at most `SHARE.snapshotMaxSize`) right after `renderer.render()` in `drawFrame`. Main requests a photo whenever a meal sets a new biggest object (`SHARE.snapshotDelay` 0.3 s later, mid-infall, throttled to one per `snapshotMinInterval` 1.5 s), and `ensure()` takes one as the hole starts to evaporate if the run has none. Reset with the run.
+  - `src/share/shareCard.ts`: `renderShareCard(stats, photo)` draws a 1200x675 PNG: photo with the hole at `SHARE.holeX` 0.66, dark left panel with SPAGHETTIFY, score, NEW BEST, the ladder line ("You ate a gas giant", same `ladderLine` as the score screen), tier, "N objects spaghettified in m:ss", "How big can you grow?" and the URL. Seeded star field when there is no photo. `shareText` and `cardFileName` (`spaghettify-<score>.png`).
+  - `src/share/share.ts`: `shareMethod()` is `share` only on touch-first devices with `navigator.canShare({ files })`, otherwise `download`. `deliverCard` shares the PNG with the text (which includes the URL); a cancel does nothing, any other share error falls back to the download.
+  - Score screen: a SHARE / SAVE CARD button under PLAY AGAIN plus a status line ("Card saved", "Shared"). The card and its PNG blob are made when the screen opens so the tap keeps its user activation for Web Share. The score screen now scrolls (body `margin: auto`) so the buttons are reachable on short landscape phones.
+  - Analytics: `share` event (`method`, `band`, `tier`) on a completed share or download; added to the table in `deploy/DEPLOY.md`.
+  - `index.html`: meta description, og:title, og:description, og:url, theme-color.
+  - Config: `SHARE` block (URL, card size, hole position, photo tunables, file prefix).
+  - Tests (21 pass): desktop fallback (Web Share removed): photo is a lit frame, card is 1200x675 with text drawn, SAVE CARD downloads `spaghettify-<score>.png` with a valid PNG header of the right size, status shows, Play again clears the photo, no console errors. Touch device with a stubbed `navigator.share`: SHARE hands over one image/png file and text ending in the URL. Debug handle has `snapshot` and `share`.
+  - Judged by a real-GPU still (gas giant run): the card reads well; the photo shows the hole and disk large on the right.
+
 ## In progress
 (nothing)
 
@@ -192,9 +203,14 @@ Suggested model/effort in brackets.
 
 - 2026-10-09: Caddy instead of nginx for the static server: brotli from precompressed files works out of the box (`precompressed br gzip`), the official nginx image has no brotli module. Files are precompressed at build time with Node's zlib, so no extra npm dependency.
 - 2026-10-09: The image reaches TrueNAS by `docker save` / `docker load` because the repo has no git remote. A registry (ghcr.io via GitHub Actions) is the upgrade path once the repo is pushed; not done because it is outward-facing.
+- 2026-10-09: Share card uses Web Share only on touch-first devices. Desktop Chrome on Windows also supports Web Share with files, but a Windows share sheet is a poor fit for a score screen button, so desktop always downloads (and the button says SAVE CARD there).
+- 2026-10-09: The card photo is the moment of the run's biggest meal (mid-infall, so it can show the spaghettification), not the end of the run, where the hole is small and dimmed by evaporation. Copied into a small 2D canvas right after a render instead of turning on preserveDrawingBuffer, which costs every frame.
 - 2026-10-09: Analytics loads from a module (not a static tag in index.html) so dev, preview, the local container and tests never send events, same as Rex Chase. Default subdomain `spaghettify.swikrut.com`.
 
 ## Known bugs
+- Share: not tried on a real phone. Some share targets drop the text when a file is attached, so the URL is also printed on the card. No og:image yet (a static card image for link previews would need a server-rendered or fixed image).
+- Share: the photo is whatever the camera saw 0.3 s after the record meal; a small record object early in the run, or one that is mostly off screen, gives a plain photo. A later bigger record replaces it.
+- Score screen: the hunger overlay's EVAPORATING text and vignette stay on under the score screen (faintly visible below the buttons). Pre-existing.
 - Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
 - Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score. The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
 - Touch: scheme changes only take effect from the settings panel; a Chrome pull-to-refresh or iOS Safari edge gestures are not blocked beyond `touch-action: none` on the canvas. No haptics.
@@ -215,7 +231,7 @@ Suggested model/effort in brackets.
 - Perf: half-size bloom (levels 3 to 5) loses most of the soft glow around the photon ring and the inner disk edge; judge by eye. Bloom is now the biggest single pass at High on a portrait phone screen (0.2 of 0.54 ms here).
 - Camera: on a portrait phone the vertical FOV is fixed, so the view is very narrow and the fed disk spans nearly the whole screen width. Gameplay issue for the phone playtest (consider a horizontal FOV floor in `GameCamera.resize`).
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
-- Deploy: not yet live. Umami `websiteId` is empty (analytics off) until the user fills it in; the subdomain is assumed to be `spaghettify.swikrut.com`. Not verified behind Cloudflare. No og:image or meta description yet (worth adding with the share card).
+- Deploy: not yet live. Umami `websiteId` is empty (analytics off) until the user fills it in; the subdomain is assumed to be `spaghettify.swikrut.com`. Not verified behind Cloudflare. Meta description and og tags added in M10; no og:image.
 
 ## Open questions
 - Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.

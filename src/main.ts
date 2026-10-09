@@ -14,12 +14,15 @@ import { AutoQuality } from './render/AutoQuality';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
 import { createStarfield } from './scene/Starfield';
+import { RunSnapshot } from './share/RunSnapshot';
+import { deliverCard, shareMethod } from './share/share';
+import { cardBlob, cardFileName, renderShareCard, shareText } from './share/shareCard';
 import { isTouchFirst, Settings } from './settings/Settings';
 import { TierDirector } from './spawning/TierDirector';
 import { HungerOverlay } from './ui/HungerOverlay';
 import { PauseMenu } from './ui/PauseMenu';
 import { PerfOverlay } from './ui/PerfOverlay';
-import { ScoreScreen } from './ui/ScoreScreen';
+import { ScoreScreen, type RunStats } from './ui/ScoreScreen';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { TierBanner } from './ui/TierBanner';
 import { loadBest, saveBest, TitleScreen } from './ui/TitleScreen';
@@ -39,8 +42,11 @@ scene.add(starfield.points, player.group, prey.mesh, new THREE.AmbientLight(0xff
 
 const audio = new AudioEngine();
 const settings = new Settings();
+const snapshot = new RunSnapshot();
 player.onEat = (_mass, what) => {
   if (!what) return;
+  // A new biggest meal is the share card's photo: taken a moment later, while it spaghettifies.
+  if (player.biggestEaten === what) snapshot.request();
   audio.eat(what.radius, player.radius);
   // Eat feedback: every meal kicks the camera in a little, big ones also shake it.
   const ratio = what.radius / player.radius;
@@ -67,7 +73,7 @@ hunger.onEnd = () => {
   const previous = loadBest();
   const newBest = score > previous;
   if (newBest) saveBest(score);
-  scoreScreen.show({
+  const stats: RunStats = {
     score,
     best: Math.max(score, previous),
     newBest,
@@ -76,7 +82,9 @@ hunger.onEnd = () => {
     tierTitle: tiers.tier.title,
     eatenCount: player.eatenCount,
     seconds: hunger.runTime,
-  });
+  };
+  scoreScreen.show(stats);
+  prepareShare(stats);
   track('run-end', {
     band: scoreBand(score),
     tier: tiers.index + 1,
@@ -85,6 +93,36 @@ hunger.onEnd = () => {
     newBest,
   });
   refreshMenus();
+};
+
+// Share card: rendered as the score screen opens, so the button can hand it to the share sheet at once
+// (Web Share needs the tap's user activation).
+const share = { stats: null as RunStats | null, card: null as HTMLCanvasElement | null, blob: null as Promise<Blob | null> | null };
+const method = shareMethod();
+function prepareShare(stats: RunStats): void {
+  share.stats = stats;
+  share.card = renderShareCard(stats, snapshot.image);
+  share.blob = cardBlob(share.card);
+  scoreScreen.setShare(method === 'share' ? 'SHARE' : 'SAVE CARD', true);
+}
+let sharing = false;
+scoreScreen.onShare = async () => {
+  const stats = share.stats;
+  if (!stats || !share.blob || sharing) return;
+  sharing = true;
+  try {
+    const blob = await share.blob;
+    if (!blob) {
+      scoreScreen.setStatus('Could not make the card');
+      return;
+    }
+    const used = await deliverCard(blob, cardFileName(stats), shareText(stats), method);
+    if (!used) return;
+    scoreScreen.setStatus(used === 'download' ? 'Card saved' : 'Shared');
+    track('share', { method: used, band: scoreBand(stats.score), tier: stats.tierNumber });
+  } finally {
+    sharing = false;
+  }
 };
 
 // Fresh run: player, tier, camera, prey pool, hunger and overlays. The camera resets before the prey (spawn distances follow it).
@@ -97,6 +135,7 @@ function resetRun(): void {
   hungerOverlay.reset();
   banner.reset();
   audio.reset(player.radius);
+  snapshot.reset();
 }
 
 const renderer = new Renderer(canvas, scene, gameCamera.camera, player);
@@ -244,6 +283,8 @@ const debug = {
   allTiers: TIERS,
   camera: gameCamera,
   renderer,
+  snapshot,
+  share,
   autoQuality,
   get qualityLevel() {
     return qualityLevel();
@@ -263,6 +304,7 @@ const perfOverlay = new URLSearchParams(location.search).has('perf') ? new PerfO
 
 function drawFrame(start: number): void {
   renderer.render();
+  snapshot.afterRender(canvas);
   for (const read of pixelReads.splice(0)) read.resolve(renderer.readPixel(read.x, read.y));
   debug.frames++;
   debug.cpuMs += (performance.now() - start - debug.cpuMs) * 0.05;
@@ -289,6 +331,9 @@ function frame(now: number): void {
   // Input only steers while the run is live; during and after the evaporation the hole just drifts.
   player.update(dt, hunger.phase === 'playing' ? input.move : NO_MOVE, gameCamera.viewScale);
   hunger.update(dt, realDt);
+  snapshot.update(realDt);
+  // A run with no photo yet gets one as the hole starts to evaporate.
+  if (hunger.phase === 'evaporating') snapshot.ensure();
   player.canEat = hunger.phase === 'playing';
   hungerOverlay.update(realDt, hunger.level);
   player.disk.starvation = hungerOverlay.level;

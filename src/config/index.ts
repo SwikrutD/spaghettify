@@ -449,3 +449,22 @@ export const ANALYTICS = {
   // FILL IN if the subdomain differs: the public hostname the game is served from.
   domains: ['spaghettify.swikrut.com'],
 } as const;
+
+/** Share card: a PNG of the run, shared through the Web Share API on touch devices or downloaded. */
+export const SHARE = {
+  /** Public game URL printed on the card and in the share text. Change with the subdomain. */
+  url: 'https://spaghettify.swikrut.com',
+  /** Card size in pixels (16:9, previews well in chats and social posts). */
+  width: 1200,
+  height: 675,
+  /** Where the hole sits on the card, as a fraction of the width (the text panel is on the left). */
+  holeX: 0.66,
+  /** The run screenshot is scaled so its long side is at most this many pixels. */
+  snapshotMaxSize: 1280,
+  /** A new biggest meal is photographed this many real seconds later, mid-infall, while it spaghettifies. */
+  snapshotDelay: 0.3,
+  /** Never photograph more often than this (real seconds), so the early stream of new records stays cheap. */
+  snapshotMinInterval: 1.5,
+  /** Downloaded file name: `${filePrefix}-${score}.png`. */
+  filePrefix: 'spaghettify',
+} as const;

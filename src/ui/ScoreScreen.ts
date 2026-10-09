@@ -15,9 +15,13 @@ export interface RunStats {
 export class ScoreScreen {
   /** Called when the player asks for a new run. */
   onRestart: (() => void) | null = null;
+  /** Called when the player asks to share the run (the share card). */
+  onShare: (() => void) | null = null;
   private readonly root = document.createElement('div');
   private readonly body = document.createElement('div');
   private readonly button = document.createElement('button');
+  private readonly shareButton = document.createElement('button');
+  private readonly status = document.createElement('div');
   private visible = false;
 
   constructor(parent: HTMLElement = document.body) {
@@ -32,9 +36,11 @@ export class ScoreScreen {
       fontFamily: 'system-ui, sans-serif',
       textAlign: 'center',
       zIndex: '10',
+      // Short landscape phones: scroll instead of clipping the buttons. The body centres itself with margin auto.
+      overflowY: 'auto',
     });
     this.root.dataset.testid = 'score-screen';
-    Object.assign(this.body.style, { padding: '24px', maxWidth: '90vw' });
+    Object.assign(this.body.style, { padding: '24px', maxWidth: '90vw', margin: 'auto' });
     Object.assign(this.button.style, {
       marginTop: '28px',
       padding: '14px 40px',
@@ -50,6 +56,25 @@ export class ScoreScreen {
     this.button.textContent = 'PLAY AGAIN';
     this.button.dataset.testid = 'play-again';
     this.button.addEventListener('click', () => this.restart());
+    Object.assign(this.shareButton.style, {
+      display: 'block',
+      margin: '12px auto 0',
+      padding: '10px 28px',
+      fontSize: '14px',
+      letterSpacing: '0.2em',
+      fontWeight: '700',
+      color: '#fff',
+      background: 'rgba(160, 180, 230, 0.08)',
+      border: '2px solid rgba(160, 180, 230, 0.4)',
+      borderRadius: '8px',
+      cursor: 'pointer',
+    });
+    this.shareButton.dataset.testid = 'share';
+    this.shareButton.addEventListener('click', () => {
+      if (this.visible) this.onShare?.();
+    });
+    Object.assign(this.status.style, { minHeight: '18px', marginTop: '8px', fontSize: '13px', opacity: '0.7' });
+    this.status.dataset.testid = 'share-status';
     window.addEventListener('keydown', (e) => {
       if (this.visible && e.code === 'Enter') this.restart();
     });
@@ -73,9 +98,22 @@ export class ScoreScreen {
       row('Objects eaten', String(stats.eatenCount)) +
       row('Time', `${mins}:${secs}`) +
       `</div>`;
-    this.body.append(document.createElement('div'), this.button);
+    this.status.textContent = '';
+    this.body.append(document.createElement('div'), this.button, this.shareButton, this.status);
     this.root.style.display = 'flex';
     this.visible = true;
+  }
+
+  /** Share button label ('SHARE' or 'SAVE CARD') and whether it can be pressed right now. */
+  setShare(label: string, enabled: boolean): void {
+    this.shareButton.textContent = label;
+    this.shareButton.disabled = !enabled;
+    this.shareButton.style.opacity = enabled ? '1' : '0.5';
+  }
+
+  /** Short feedback under the buttons ("Card saved"). */
+  setStatus(text: string): void {
+    this.status.textContent = text;
   }
 
   hide(): void {
