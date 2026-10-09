@@ -26,6 +26,8 @@ interface Debug {
     pull: { x: number; z: number };
     stun: number;
     radiusForMass(): number;
+    setRadius(r: number): void;
+    startMass: number;
   };
   hunger: { phase: string; idle: number; level: number; enabled: boolean; floorMass: number; runTime: number };
   hungerOverlay: { level: number };
@@ -77,6 +79,22 @@ interface Debug {
     reset(tier: unknown): void;
   };
   shedBurst: { live: number };
+  debris: {
+    objects: {
+      active: boolean;
+      state: string;
+      radius: number;
+      mass: number;
+      age: number;
+      heat: number;
+      position: { x: number; z: number };
+      velocity: { x: number; z: number };
+    }[];
+    live: number;
+    liveMass: number;
+    emitted: number;
+    reset(): void;
+  };
   share: { card: HTMLCanvasElement | null };
 }
 declare global {
@@ -1401,8 +1419,11 @@ test.describe('dangers', () => {
     });
   });
 
-  /** Start a run with hunger off, the field cleared away and one big still body `gapRadii` hole radii to the right (centre to centre). */
-  async function oneBigBody(page: Page, sizeRatio: number, gapRadii: number, realClick = false): Promise<string[]> {
+  /**
+   * Start a run with hunger off, the field cleared away and one big still body `gapRadii` hole radii to the right
+   * (centre to centre). `grow` multiplies the hole's mass first (a hole at the start mass sheds nothing).
+   */
+  async function oneBigBody(page: Page, sizeRatio: number, gapRadii: number, realClick = false, grow = 1): Promise<string[]> {
     const errors: string[] = [];
     page.on('console', (m) => {
       if (m.type() === 'error' && !m.text().includes('Failed to load resource')) errors.push(m.text());
@@ -1412,10 +1433,12 @@ test.describe('dangers', () => {
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     await startRun(page, realClick);
     await page.evaluate(
-      ([sizeRatio, gapRadii]) => {
+      ([sizeRatio, gapRadii, grow]) => {
         const d = window.__spaghettify;
         const { player, prey } = d;
         d.hunger.enabled = false;
+        player.mass *= grow;
+        player.setRadius(player.radiusForMass());
         // Everything else respawns on the ring off screen, out of pull reach.
         for (const o of prey.objects) o.position.x += 100000;
         const body = prey.objects[0];
@@ -1425,7 +1448,7 @@ test.describe('dangers', () => {
         body.position.set(player.position.x + player.radius * gapRadii, 0, player.position.z);
         player.velocity.set(0, 0, 0);
       },
-      [sizeRatio, gapRadii],
+      [sizeRatio, gapRadii, grow],
     );
     return errors;
   }
@@ -1456,19 +1479,26 @@ test.describe('dangers', () => {
     expect(errors).toEqual([]);
   });
 
-  test('collision: touching a big body knocks the hole back, sheds mass (not score), then grants invulnerability', async ({ page }) => {
+  test('collision: touching a big body knocks the hole back, visibly shrinks it (not score), throws debris, then grants invulnerability', async ({ page }) => {
     // A real click unlocks audio so the hit sound can be counted.
-    const errors = await oneBigBody(page, 4, 1, true);
+    const errors = await oneBigBody(page, 4, 1000, true, 9);
+    // Read the hole, then put the body on it in the same tick: one hit on the next frame.
     const before = await page.evaluate(() => {
-      const { player, camera } = window.__spaghettify;
-      return { mass: player.mass, eatenMass: player.eatenMass, shake: camera.shake };
+      const { player, camera, prey } = window.__spaghettify;
+      const body = prey.objects[0];
+      body.state = 'alive';
+      body.radius = player.radius * 4;
+      body.mass = body.radius * body.radius;
+      body.velocity.set(0, 0, 0);
+      body.position.set(player.position.x + body.radius, 0, player.position.z);
+      return { mass: player.mass, radius: player.radius, eatenMass: player.eatenMass, shake: camera.shake };
     });
 
-    // The body was placed overlapping the hole: one hit on the next frame.
     await page.waitForFunction(() => window.__spaghettify.dangers.hits === 1);
     const hit = await page.evaluate(() => {
-      const { player, prey, dangers, camera, shedBurst, audio } = window.__spaghettify;
+      const { player, prey, dangers, camera, shedBurst, audio, debris, hunger } = window.__spaghettify;
       const body = prey.objects[0];
+      const frags = debris.objects.filter((f) => f.active);
       return {
         mass: player.mass,
         eatenMass: player.eatenMass,
@@ -1479,10 +1509,17 @@ test.describe('dangers', () => {
         shake: camera.shake,
         sparks: shedBurst.live,
         sound: audio.played.hit ?? 0,
+        fragments: frags.length,
+        debrisMass: debris.liveMass,
+        allEdible: frags.every((f) => f.radius < player.radiusForMass() * 0.95),
+        allAway: frags.every((f) => f.velocity.x < 0),
+        hot: Math.min(...frags.map((f) => f.heat)),
+        time: hunger.runTime,
       };
     });
-    expect(hit.mass).toBeLessThan(before.mass * 0.95);
-    expect(hit.mass).toBeGreaterThan(before.mass * 0.8);
+    // About a fifth of the mass, over a tenth of the radius.
+    expect(hit.mass).toBeLessThan(before.mass * 0.82);
+    expect(hit.mass).toBeGreaterThan(before.mass * 0.7);
     expect(hit.shed).toBeCloseTo(before.mass - hit.mass, 5);
     expect(hit.eatenMass).toBe(before.eatenMass);
     // Knocked back: pushed out of the body and moving away from it (it is to the right).
@@ -1492,13 +1529,37 @@ test.describe('dangers', () => {
     expect(hit.shake).toBeGreaterThan(before.shake);
     expect(hit.sparks).toBeGreaterThan(0);
     expect(hit.sound).toBe(1);
+    // The shed mass flies off as hot, edible debris, away from the body.
+    expect(hit.fragments).toBeGreaterThanOrEqual(5);
+    expect(hit.debrisMass).toBeGreaterThan(hit.shed * 0.6);
+    expect(hit.debrisMass).toBeLessThanOrEqual(hit.shed + 1e-9);
+    expect(hit.allEdible).toBe(true);
+    expect(hit.allAway).toBe(true);
+    expect(hit.hot).toBeGreaterThan(0.7);
 
-    // Invulnerable: shoved back into the body, the hole is pushed out again but loses nothing.
+    // The visible radius drops fast: all the way down within half a second of game time. The rest of the
+    // field is sent off every frame meanwhile so nothing else is eaten.
+    const shrunk = await page.evaluate(async (t) => {
+      const { player, debris, prey, hunger } = window.__spaghettify;
+      while (hunger.runTime < t + 0.5) {
+        for (let i = 1; i < prey.objects.length; i++) prey.objects[i].position.x += 100000;
+        await new Promise(requestAnimationFrame);
+      }
+      return { radius: player.radius, target: player.radiusForMass(), heat: Math.max(...debris.objects.filter((f) => f.active).map((f) => f.heat)) };
+    }, hit.time);
+    expect(shrunk.radius).toBeLessThan(before.radius * 0.92);
+    expect(Math.abs(shrunk.radius - shrunk.target)).toBeLessThan(shrunk.target * 0.03);
+    // The fragments are cooling.
+    expect(shrunk.heat).toBeLessThan(hit.hot);
+
+    // Invulnerable: shoved back into the body, the hole is pushed out again but loses nothing and throws nothing.
     const again = await page.evaluate(async () => {
       const d = window.__spaghettify;
       const { player, prey, dangers } = d;
       const body = prey.objects[0];
+      d.debris.reset();
       const mass = player.mass;
+      dangers.invulnerable = Math.max(dangers.invulnerable, 0.5);
       player.position.x = body.position.x - body.radius * 0.5;
       player.position.z = body.position.z;
       const f = d.frames;
@@ -1508,29 +1569,158 @@ test.describe('dangers', () => {
         lost: mass - player.mass,
         gap: Math.hypot(player.position.x - body.position.x, player.position.z - body.position.z) - (player.radius + body.radius),
         invulnerable: dangers.invulnerable,
+        debris: d.debris.emitted,
       };
     });
     expect(again.hits).toBe(1);
     expect(again.lost).toBeLessThan(1e-9);
     expect(again.gap).toBeGreaterThanOrEqual(-1e-6);
     expect(again.invulnerable).toBeGreaterThan(0);
+    expect(again.debris).toBe(0);
+    expect(errors).toEqual([]);
+  });
 
-    // Once it wears off the next contact hurts again, but a hit never takes mass below the margin over the hunger floor.
-    await page.waitForFunction(() => window.__spaghettify.dangers.invulnerable === 0, undefined, { timeout: 30_000 });
-    const floorCase = await page.evaluate(async () => {
+  test('repeated hits: each one shrinks the hole, even right after another hit or during hunger drain, and never ends the run', async ({ page }) => {
+    test.setTimeout(90_000);
+    const errors = await oneBigBody(page, 4, 1000, false, 9);
+    /** Wait out the invulnerability, put a big body on the hole and report the mass and radius before and after the hit. */
+    const hitOnce = (setup: 'none' | 'drained') =>
+      page.evaluate(async (setup) => {
+        const d = window.__spaghettify;
+        const { player, prey, dangers, hunger, debris, comets } = d;
+        // Every frame the rest of the field is sent off to respawn far away, so nothing else is eaten meanwhile.
+        const frame = () => {
+          for (let i = 1; i < prey.objects.length; i++) prey.objects[i].position.x += 100000;
+          return new Promise(requestAnimationFrame);
+        };
+        while (dangers.invulnerable > 0) await frame();
+        // Eating debris back would muddle the masses here; the debris test covers it.
+        debris.reset();
+        comets.reset(d.tiers.tier);
+        if (setup === 'drained') {
+          // As if starving had drained the hole to just over its hunger floor, with the drain still running.
+          player.mass = hunger.floorMass * 1.02;
+          player.setRadius(player.radiusForMass());
+          hunger.enabled = true;
+          hunger.idle = 60;
+        }
+        const hits = dangers.hits;
+        const eaten = player.eatenCount;
+        const shed = dangers.shedMass;
+        const mass = player.mass;
+        const radius = player.radius;
+        player.velocity.set(0, 0, 0);
+        const body = prey.objects[0];
+        body.state = 'alive';
+        body.radius = player.radius * 4;
+        body.mass = body.radius * body.radius;
+        body.velocity.set(0, 0, 0);
+        body.position.set(player.position.x + body.radius, 0, player.position.z);
+        while (dangers.hits === hits) await frame();
+        const after = { shed: dangers.shedMass - shed, mass: player.mass, floor: hunger.floorMass, phase: hunger.phase, fragments: debris.live };
+        // Out of the way (it respawns as ordinary prey), and no debris to eat back.
+        body.position.x += 100000;
+        debris.reset();
+        // Half a second on: the radius is clearly down and the hunger drain has not ended the run.
+        const t = hunger.runTime;
+        while (hunger.runTime < t + 0.5) await frame();
+        const later = { eaten: player.eatenCount - eaten, radius: player.radius, phase: hunger.phase, mass: player.mass, floor: hunger.floorMass };
+        hunger.enabled = false;
+        hunger.idle = 0;
+        return { mass, radius, after, later };
+      }, setup);
+
+    // First, second (as soon as the first wears off) and third (during hunger drain) hits all shed about a fifth.
+    for (const setup of ['none', 'none', 'drained'] as const) {
+      const r = await hitOnce(setup);
+      expect(r.after.shed).toBeGreaterThan(r.mass * 0.18);
+      expect(r.after.shed).toBeLessThan(r.mass * 0.3);
+      expect(r.after.fragments).toBeGreaterThan(0);
+      // The hit itself never starves the hole: the floor drops to 0.8 of what is left (the drain may have taken a sliver since).
+      expect(r.after.floor).toBeLessThan(r.after.mass * 0.85);
+      expect(r.after.phase).toBe('playing');
+      expect(r.later.phase).toBe('playing');
+      expect(r.later.mass).toBeGreaterThan(r.later.floor);
+      expect(r.later.eaten).toBe(0);
+      expect(r.later.radius).toBeLessThan(r.radius * 0.92);
+    }
+    expect(await page.evaluate(() => window.__spaghettify.dangers.hits)).toBe(3);
+
+    // Never below the start mass: a hole just over it only loses the difference.
+    const atStart = await page.evaluate(async () => {
       const d = window.__spaghettify;
-      const { player, prey, dangers, hunger } = d;
+      const { player, prey, dangers } = d;
+      while (dangers.invulnerable > 0) await new Promise(requestAnimationFrame);
+      d.debris.reset();
+      player.mass = player.startMass * 1.1;
+      player.setRadius(player.radiusForMass());
       const body = prey.objects[0];
-      player.mass = hunger.floorMass * 1.18;
-      player.position.x = body.position.x - body.radius * 0.5;
-      player.position.z = body.position.z;
+      const hits = dangers.hits;
+      player.velocity.set(0, 0, 0);
+      body.state = 'alive';
+      body.radius = player.radius * 4;
+      body.mass = body.radius * body.radius;
+      body.velocity.set(0, 0, 0);
+      body.position.set(player.position.x + body.radius, 0, player.position.z);
+      while (dangers.hits === hits) await new Promise(requestAnimationFrame);
+      return { mass: player.mass, start: player.startMass, phase: d.hunger.phase };
+    });
+    expect(atStart.mass).toBeCloseTo(atStart.start, 9);
+    expect(atStart.phase).toBe('playing');
+    expect(errors).toEqual([]);
+  });
+
+  test('debris: fragments cannot be eaten at once, then the hole eats them back for mass but not score', async ({ page }) => {
+    const errors = await oneBigBody(page, 4, 1, false, 9);
+    await page.waitForFunction(() => window.__spaghettify.dangers.hits === 1);
+    const early = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { player, prey, debris } = d;
+      // Clear the body away and hold the hole still.
+      prey.objects[0].position.x += 100000;
+      player.stun = 0;
+      player.velocity.set(0, 0, 0);
+      // Straight onto a fresh fragment: too hot to eat yet.
+      const frag = debris.objects.find((f) => f.active)!;
+      const eaten = player.eatenCount;
+      player.position.x = frag.position.x;
+      player.position.z = frag.position.z;
       const f = d.frames;
       while (d.frames < f + 2) await new Promise(requestAnimationFrame);
-      return { hits: dangers.hits, mass: player.mass, floor: hunger.floorMass, phase: hunger.phase };
+      return { eaten: player.eatenCount - eaten, state: frag.state };
     });
-    expect(floorCase.hits).toBe(2);
-    expect(floorCase.mass).toBeGreaterThanOrEqual(floorCase.floor * 1.15 - 1e-9);
-    expect(floorCase.phase).toBe('playing');
+    expect(early.eaten).toBe(0);
+    expect(early.state).toBe('alive');
+
+    const meal = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { player, debris } = d;
+      while (debris.objects.some((f) => f.active && f.state === 'alive' && f.age < 0.7)) await new Promise(requestAnimationFrame);
+      const frag = debris.objects.find((f) => f.active && f.state === 'alive')!;
+      const before = { mass: player.mass, eatenMass: player.eatenMass, eatenCount: player.eatenCount, biggest: player.biggestEaten?.name ?? null };
+      const fragMass = frag.mass;
+      // Chase it: sit the hole on the drifting fragment every frame until it is swallowed.
+      for (let i = 0; i < 60 && frag.state === 'alive'; i++) {
+        player.velocity.set(0, 0, 0);
+        player.position.x = frag.position.x;
+        player.position.z = frag.position.z;
+        await new Promise(requestAnimationFrame);
+      }
+      return {
+        state: frag.state,
+        gained: player.mass - before.mass,
+        fragMass,
+        eatenMass: player.eatenMass - before.eatenMass,
+        eaten: player.eatenCount - before.eatenCount,
+        biggestBefore: before.biggest,
+        biggestAfter: player.biggestEaten?.name ?? null,
+      };
+    });
+    expect(meal.state).toBe('eating');
+    expect(meal.eaten).toBeGreaterThanOrEqual(1);
+    expect(meal.gained).toBeGreaterThanOrEqual(meal.fragMass * 0.999);
+    expect(meal.eatenMass).toBe(0);
+    expect(meal.biggestAfter).toBe(meal.biggestBefore);
     expect(errors).toEqual([]);
   });
 
@@ -1630,6 +1820,8 @@ test.describe('dangers', () => {
       const { comets, player } = d;
       const eaten = player.eatenCount;
       comets.reset(d.tiers.tier);
+      // The hit's debris would be a meal too.
+      d.debris.reset();
       // Hold the hole still after the knockback.
       player.stun = 0;
       player.velocity.set(0, 0, 0);

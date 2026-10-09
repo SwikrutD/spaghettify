@@ -12,6 +12,8 @@
 attribute vec4 aStretch;
 // Tidal heating glow, 0..1.
 attribute float aGlow;
+// Heat of the body itself, 0..1, wherever it is (hot shed debris).
+attribute float aHeat;
 
 // Hole centre (world x, z) and core radius.
 uniform vec3 uHole;
@@ -23,6 +25,7 @@ uniform float uKnee;
 uniform float uGlowReach;
 
 varying float vGlow;
+varying float vHeat;
 
 // Curl angle of the current vertex, left by spaghettify() for spaghettifyNormal().
 float spgPhi = 0.0;
@@ -53,6 +56,7 @@ vec3 spaghettify(vec3 centre, vec3 p) {
   q.xz = uHole.xy + vec2(o.x * c + o.y * sn, -o.x * sn + o.y * c);
 
   vGlow = aGlow * (1.0 - smoothstep(1.0, uGlowReach, r / uHole.z));
+  vHeat = aHeat;
   return q;
 }
 

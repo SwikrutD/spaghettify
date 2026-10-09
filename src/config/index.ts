@@ -131,10 +131,18 @@ export const DANGER = {
   /** Seconds after a hit when input is ignored, and how fast the velocity recovers meanwhile (1/s). */
   stunTime: 0.3,
   stunResponsiveness: 0.8,
-  /** Fraction of mass shed per hit (not score: score is mass eaten). */
-  shedFraction: 0.12,
-  /** A hit never takes mass below the hunger floor x this. Hits alone never end a run; they bring starvation closer. */
-  shedFloorMargin: 1.15,
+  /** Fraction of mass shed per hit (not score: score is mass eaten). 0.22 of mass is about 12 percent of radius. */
+  shedFraction: 0.22,
+  /**
+   * A hit never takes mass below the start mass, and never ends a run by itself: after a hit the hunger floor
+   * is lowered, if needed, to at most this fraction of the remaining mass.
+   */
+  hitFloorGap: 0.8,
+  /** After a hit the visible radius drops at this rate (1/s) instead of GROWTH.radiusSmoothing, for squashTime seconds. */
+  shrinkRate: 22,
+  /** Squash on a hit: the core flattens by up to this fraction and springs back over squashTime seconds. */
+  squashAmount: 0.18,
+  squashTime: 0.4,
   /** Seconds of invulnerability after a hit. Contact still pushes the hole out, without damage. */
   invulnerableTime: 1.2,
   /** The disk blinks while invulnerable: blinks per second and how much it dims (0..1, the starvation scale). */
@@ -179,7 +187,45 @@ export const COMETS = {
   appearTime: 0.6,
 } as const;
 
-/** Glowing fragments thrown off the disk when a hit sheds mass. Pure effect, never edible. */
+/**
+ * Debris: the mass a hit sheds is thrown out as edible fragments, flung away from the contact. They glow hot,
+ * slow down and cool, and the hole (or anyone, in an arena) can eat them back. Eating your own debris restores
+ * mass but is not score.
+ */
+export const DEBRIS = {
+  /** Pool size; a full pool reuses the oldest fragment. */
+  poolSize: 40,
+  /** Fragments per hit. */
+  perHit: 7,
+  /** Fraction of the shed mass that becomes debris (the rest is lost as the spark burst). */
+  massFraction: 0.8,
+  /** Fragment masses are random weights in this range, normalised to the debris mass of the hit. */
+  weight: [0.4, 1],
+  /** Launch speed as a multiple of the hole's top speed at its size, and drag (1/s). */
+  speedMin: 0.35,
+  speedMax: 1.1,
+  drag: 1.6,
+  /** Directions fan out within this angle (radians) either side of the knock direction (away from the contact). */
+  spread: 1.5,
+  /** Fragments start this many hole radii out from the centre. */
+  launchRadius: 1.15,
+  /** Seconds before a fragment can be eaten, so the hole does not swallow it at once. */
+  pickupDelay: 0.6,
+  /** Seconds a fragment lives, then it fades out over fadeTime. */
+  lifetime: 30,
+  fadeTime: 1.5,
+  /** Recycled once this far from the hole (camera distances). */
+  despawnDistance: 2.5,
+  /** Heat glow: starts at 1 and cools as exp(-coolRate * t); HDR colours of hot and cooling rock. */
+  coolRate: 0.45,
+  hotColor: 0xffd6a0,
+  coolColor: 0xb02808,
+  heatIntensity: 3,
+  /** Base rock colour (HSL ranges): dark, sooty matter. */
+  color: { hue: [0.03, 0.08], sat: [0.2, 0.4], light: [0.12, 0.2] },
+} as const;
+
+/** Glowing fragments thrown off the disk when a hit sheds mass. Pure effect, never edible (the edible part is DEBRIS). */
 export const SHED_BURST = {
   /** Particle pool and particles per hit. */
   poolSize: 96,

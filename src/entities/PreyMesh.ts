@@ -73,15 +73,15 @@ export function sizeWeight(objRadius: number, holeRadius: number): number {
   return Math.min(1, objRadius / (holeRadius * PREY.edibleRatio)) ** SPAGHETTI.sizePower;
 }
 
-/** Eat on contact: credit the mass and start the infall. */
-export function beginInfall(obj: PreyObject, player: Player): void {
+/** Eat on contact: credit the mass and start the infall. `reclaimed`: the hole's own shed matter (mass back, no score). */
+export function beginInfall(obj: PreyObject, player: Player, reclaimed = false): void {
   obj.state = 'eating';
   obj.eatProgress = 0;
   obj.eatOffset.subVectors(obj.position, player.position);
   obj.infallWeight = sizeWeight(obj.radius, player.radius);
   obj.infallTime = lerp(SPAGHETTI.infallTimeMin, SPAGHETTI.infallTimeMax, obj.infallWeight);
   obj.stretchFrom = obj.stretch;
-  player.eat(obj.mass, { name: obj.className, radius: obj.radius });
+  player.eat(obj.mass, { name: obj.className, radius: obj.radius }, reclaimed);
 }
 
 /** Random unit spin axis, angle and speed. */
@@ -114,6 +114,8 @@ export class PreyMesh {
   private readonly stretchAttr: THREE.InstancedBufferAttribute;
   /** Per instance: tidal heating glow 0..1. */
   private readonly glowAttr: THREE.InstancedBufferAttribute;
+  /** Per instance: heat of the body itself 0..1 (shed debris), zero unless set. */
+  private readonly heatAttr: THREE.InstancedBufferAttribute;
   private readonly uniforms: PreyUniforms;
 
   constructor(capacity: number, shape: PreyShape = 'rock') {
@@ -123,7 +125,10 @@ export class PreyMesh {
     this.glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
     this.glowAttr.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute('aStretch', this.stretchAttr);
+    this.heatAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
+    this.heatAttr.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute('aGlow', this.glowAttr);
+    geometry.setAttribute('aHeat', this.heatAttr);
 
     const { material, uniforms } = createPreyMaterial(shape === 'sphere');
     this.uniforms = uniforms;
@@ -142,6 +147,11 @@ export class PreyMesh {
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
   }
 
+  /** Heat glow of slot i, 0..1 (flagged for upload by commit). */
+  setHeat(i: number, heat: number): void {
+    this.heatAttr.setX(i, heat);
+  }
+
   /** Hide slot i (an idle pool entry). */
   hide(i: number): void {
     this.mesh.setMatrixAt(i, ZERO_MATRIX);
@@ -152,6 +162,7 @@ export class PreyMesh {
     this.mesh.instanceMatrix.needsUpdate = true;
     this.stretchAttr.needsUpdate = true;
     this.glowAttr.needsUpdate = true;
+    this.heatAttr.needsUpdate = true;
   }
 
   /** Transform, stretch and glow of slot i from the object's state. */

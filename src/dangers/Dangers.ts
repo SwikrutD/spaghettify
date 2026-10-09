@@ -154,11 +154,9 @@ export class Dangers {
     this.invulnerable = DANGER.invulnerableTime;
     this.blinkTime = 0;
 
-    // Shed mass, but never below a margin over the hunger floor: hits bring starvation closer, they do not end the run.
-    const keep = this.hunger.floorMass * DANGER.shedFloorMargin;
-    const target = Math.max(player.mass * (1 - DANGER.shedFraction), Math.min(player.mass, keep));
-    const shed = player.mass - target;
-    player.mass = target;
+    // Shed mass (never below the start mass); a hit alone never starves the hole, so the hunger floor drops with it.
+    const shed = player.shed(DANGER.shedFraction);
+    this.hunger.forgiveHit(DANGER.hitFloorGap);
     this.shedMass += shed;
     this.hits++;
 

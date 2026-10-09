@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PREY, SPAGHETTI } from '../config';
+import { DEBRIS, PREY, SPAGHETTI } from '../config';
 import stretchParsVert from '../shaders/preySpaghettify.pars.vert.glsl';
 import stretchVert from '../shaders/preySpaghettify.vert.glsl';
 import glowParsFrag from '../shaders/preyGlow.pars.frag.glsl';
@@ -14,7 +14,7 @@ export interface PreyUniforms {
  * Lit prey material with tidal stretching (spaghettification) in the vertex shader. `smooth` is for the round
  * bodies (smooth shading, normals bent with the stretch); otherwise flat-shaded rock.
  * Stays opaque: prey must write alpha 1, the lensing pass uses scene alpha as its play-plane mask.
- * Reads the per-instance attributes `aStretch` (vec4) and `aGlow` (float), see preySpaghettify.pars.vert.glsl.
+ * Reads the per-instance attributes `aStretch` (vec4) and `aGlow` and `aHeat` (floats), see preySpaghettify.pars.vert.glsl.
  */
 export function createPreyMaterial(smooth = false): { material: THREE.MeshStandardMaterial; uniforms: PreyUniforms } {
   const uniforms = { uHole: { value: new THREE.Vector3(0, 0, 1) } };
@@ -29,6 +29,8 @@ export function createPreyMaterial(smooth = false): { material: THREE.MeshStanda
       uKnee: { value: SPAGHETTI.knee },
       uGlowReach: { value: SPAGHETTI.glowReach },
       uGlowColor: { value: new THREE.Color(SPAGHETTI.glowColor).multiplyScalar(SPAGHETTI.glowIntensity) },
+      uHeatHot: { value: new THREE.Color(DEBRIS.hotColor).multiplyScalar(DEBRIS.heatIntensity) },
+      uHeatCool: { value: new THREE.Color(DEBRIS.coolColor).multiplyScalar(DEBRIS.heatIntensity) },
     });
     shader.vertexShader = inject(shader.vertexShader, '#include <common>', `#include <common>\n${stretchParsVert}`);
     shader.vertexShader = inject(shader.vertexShader, '#include <project_vertex>', stretchVert);

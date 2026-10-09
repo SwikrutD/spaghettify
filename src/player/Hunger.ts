@@ -34,6 +34,15 @@ export class Hunger {
     return Math.max(HUNGER.failMass, this.peakMass * HUNGER.failPeakFraction);
   }
 
+  /**
+   * After a hit: lower the floor (through the peak it follows) to at most `gap` of the current mass, so a hit
+   * can never end the run by itself. Starvation still can, from the new floor.
+   */
+  forgiveHit(gap: number): void {
+    const cap = (this.player.mass * gap) / HUNGER.failPeakFraction;
+    this.peakMass = Math.min(this.peakMass, cap);
+  }
+
   reset(): void {
     this.phase = 'playing';
     this.idle = 0;

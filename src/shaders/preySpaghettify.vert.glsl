@@ -14,6 +14,7 @@ vec4 mvPosition = vec4(transformed, 1.0);
   mvPosition = viewMatrix * mvPosition;
 #else
   vGlow = 0.0;
+  vHeat = 0.0;
   mvPosition = modelViewMatrix * mvPosition;
 #endif
 gl_Position = projectionMatrix * mvPosition;

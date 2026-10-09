@@ -9,6 +9,11 @@ export function massOfRadius(radius: number): number {
   return GROWTH.massDensity * Math.pow(radius, GROWTH.massExponent);
 }
 
+/** Radius of a body of the given mass (the inverse of massOfRadius). */
+export function radiusOfMass(mass: number): number {
+  return Math.pow(mass / GROWTH.massDensity, 1 / GROWTH.massExponent);
+}
+
 /** The hole's top speed at a view scale (camera distance over its starting distance): constant on screen. */
 export function topSpeed(viewScale: number): number {
   return PLAYER.maxSpeed * Math.pow(viewScale, PLAYER.speedExponent);
@@ -39,7 +44,10 @@ export class Player {
   /** Seconds left of a hit's stun: input is ignored and the knockback carries the hole. */
   stun = 0;
   readonly disk = new AccretionDisk();
-  private readonly startMass = this.mass;
+  /** Mass at the start of a run. A hit never takes the hole below it. */
+  readonly startMass = this.mass;
+  /** Seconds left of a hit's squash; while it runs the radius drops fast to the shed mass. */
+  private squash = 0;
 
   constructor() {
     const core = new THREE.Mesh(
@@ -69,7 +77,9 @@ export class Player {
     this.position.addScaledVector(this.velocity, dt);
 
     const target = this.radiusForMass();
-    this.setRadius(this.radius + (target - this.radius) * (1 - Math.exp(-GROWTH.radiusSmoothing * dt)));
+    this.squash = Math.max(0, this.squash - dt);
+    const rate = this.squash > 0 && target < this.radius ? DANGER.shrinkRate : GROWTH.radiusSmoothing;
+    this.setRadius(this.radius + (target - this.radius) * (1 - Math.exp(-rate * dt)));
     this.disk.update(dt, this.eatenMass / this.startMass);
   }
 
@@ -84,19 +94,32 @@ export class Player {
     this.velocity.set(0, 0, 0);
     this.pull.set(0, 0, 0);
     this.stun = 0;
+    this.squash = 0;
     this.disk.reset();
     this.setRadius(PLAYER.startRadius);
   }
 
-  /** Absorb a prey object of the given mass. */
-  eat(preyMass: number, what?: { name: string; radius: number }): void {
-    if (what && (!this.biggestEaten || what.radius > this.biggestEaten.radius)) this.biggestEaten = what;
+  /**
+   * Absorb a prey object of the given mass. `reclaimed` is the hole's own shed debris: the mass comes back but
+   * it is not score (eatenMass) and never the biggest meal, so bumping to farm debris gains nothing.
+   */
+  eat(preyMass: number, what?: { name: string; radius: number }, reclaimed = false): void {
+    if (!reclaimed && what && (!this.biggestEaten || what.radius > this.biggestEaten.radius)) this.biggestEaten = what;
     const gained = preyMass * GROWTH.absorbEfficiency;
     this.mass += gained;
-    this.eatenMass += gained;
+    if (!reclaimed) this.eatenMass += gained;
     this.eatenCount++;
     this.disk.feed(gained / this.mass);
     this.onEat?.(preyMass, what);
+  }
+
+  /** Lose mass to a hit, never below the start mass: the radius drops fast with a squash. Returns the mass lost. */
+  shed(fraction: number): number {
+    const target = Math.max(this.mass * (1 - fraction), Math.min(this.mass, this.startMass));
+    const lost = this.mass - target;
+    this.mass = target;
+    this.squash = DANGER.squashTime;
+    return lost;
   }
 
   /** Continuous mass-to-radius curve. */
@@ -109,7 +132,15 @@ export class Player {
     this.applyRadius();
   }
 
+  /** Group scale: the radius, flattened and widened a little by a hit's squash (a damped wobble). */
   private applyRadius(): void {
-    this.group.scale.setScalar(this.radius);
+    const r = this.radius;
+    if (this.squash <= 0) {
+      this.group.scale.setScalar(r);
+      return;
+    }
+    const t = 1 - this.squash / DANGER.squashTime;
+    const w = DANGER.squashAmount * Math.sin(t * Math.PI * 2) * (1 - t);
+    this.group.scale.set(r * (1 + w * 0.5), r * (1 - w), r * (1 + w * 0.5));
   }
 }

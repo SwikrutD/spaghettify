@@ -5,6 +5,7 @@ import { AudioEngine } from './audio/AudioEngine';
 import { Dangers } from './dangers/Dangers';
 import { ShedBurst } from './effects/ShedBurst';
 import { CometField } from './entities/CometField';
+import { DebrisField } from './entities/DebrisField';
 import { PreyField } from './entities/PreyField';
 import { InputManager } from './input/InputManager';
 import { GamepadInput } from './input/GamepadInput';
@@ -12,7 +13,7 @@ import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
 import { TouchInput } from './input/TouchInput';
 import { Hunger } from './player/Hunger';
-import { Player } from './player/Player';
+import { Player, topSpeed } from './player/Player';
 import { AutoQuality } from './render/AutoQuality';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
@@ -40,11 +41,12 @@ const tiers = new TierDirector();
 const gameCamera = new GameCamera(player.position, player.radius, tiers.tier.cameraScale);
 const prey = new PreyField(player, gameCamera, tiers.tier);
 const comets = new CometField(player, gameCamera, tiers.tier);
+const debris = new DebrisField(player, gameCamera);
 const shedBurst = new ShedBurst();
 const starfield = createStarfield();
 const keyLight = new THREE.DirectionalLight(LIGHTING.keyColor, LIGHTING.key);
 keyLight.position.set(...LIGHTING.keyPosition);
-scene.add(starfield.points, player.group, prey.group, comets.group, shedBurst.points, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
+scene.add(starfield.points, player.group, prey.group, comets.group, debris.object3d, shedBurst.points, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
 
 const audio = new AudioEngine();
 const settings = new Settings();
@@ -72,11 +74,12 @@ tiers.onTierUp = (tier, index) => {
 };
 const hunger = new Hunger(player);
 const dangers = new Dangers(player, prey, comets, hunger);
-// A hit: shake, thud and a spray of the shed disk matter.
+// A hit: shake, thud, a spray of sparks, and the shed mass thrown out as edible debris.
 dangers.onHit = (hit) => {
   gameCamera.addShake(DANGER.hitShake);
   audio.hit();
   shedBurst.emit(player.position.x, player.position.z, hit.nx, hit.nz, player.radius);
+  debris.emit(player.position.x, player.position.z, hit.nx, hit.nz, player.radius, hit.shed, topSpeed(gameCamera.viewScale));
 };
 const hungerOverlay = new HungerOverlay();
 const scoreScreen = new ScoreScreen();
@@ -149,6 +152,7 @@ function resetRun(): void {
   comets.reset(tiers.tier);
   hunger.reset();
   dangers.reset();
+  debris.reset();
   shedBurst.reset();
   hungerOverlay.reset();
   banner.reset();
@@ -292,6 +296,7 @@ const debug = {
   player,
   prey,
   comets,
+  debris,
   dangers,
   shedBurst,
   tiers,
@@ -366,6 +371,7 @@ function frame(now: number): void {
   player.disk.starvation = Math.max(hungerOverlay.level, dangers.blink);
   prey.update(dt);
   comets.update(dt);
+  debris.update(dt);
   shedBurst.update(dt);
   audio.update(realDt, player.radius, hungerOverlay.level, hunger.phase);
   gameCamera.punch = tiers.punch;
