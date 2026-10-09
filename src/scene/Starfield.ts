@@ -25,7 +25,13 @@ export function createStarfield(): THREE.Points {
     fragmentShader: frag,
     transparent: true,
     depthWrite: false,
-    blending: THREE.AdditiveBlending,
+    // Additive colour, but alpha left untouched: the lensing pass reads scene alpha as
+    // "a play-plane object is here" and stars are background.
+    blending: THREE.CustomBlending,
+    blendSrc: THREE.SrcAlphaFactor,
+    blendDst: THREE.OneFactor,
+    blendSrcAlpha: THREE.ZeroFactor,
+    blendDstAlpha: THREE.OneFactor,
   });
   const points = new THREE.Points(geo, mat);
   points.frustumCulled = false;

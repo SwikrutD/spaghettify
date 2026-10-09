@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GROWTH, PLAYER } from '../config';
 import type { MoveVector } from '../input/InputSource';
-import { CORE_LAYER } from '../render/CorePass';
+import { CORE_LAYER } from '../render/layers';
 import { AccretionDisk } from './AccretionDisk';
 
 /** Mass of a sphere-ish body of the given radius. Shared by the player and prey so eating is consistent. */
@@ -31,8 +31,9 @@ export class Player {
       new THREE.SphereGeometry(1, 48, 32),
       new THREE.MeshBasicMaterial({ color: 0x000000 }),
     );
-    // Also drawn after bloom so the shadow stays crisp (see CorePass).
-    core.layers.enable(CORE_LAYER);
+    // Not on the default layer: the core is drawn over the lensed image (never bent) and again
+    // after bloom so the shadow stays crisp (see LensingPass and CorePass).
+    core.layers.set(CORE_LAYER);
     this.group.add(core, this.disk.group);
     this.applyRadius();
   }

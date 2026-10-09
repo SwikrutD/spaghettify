@@ -13,6 +13,10 @@ interface Debug {
     objects: { position: { x: number; z: number }; radius: number; state: string }[];
     isEdible(obj: unknown): boolean;
   };
+  renderer: {
+    lensing: { centre: { x: number; y: number }; coreRadius: number; setQuality(level: number): void };
+  };
+  readPixel(x: number, y: number): Promise<number[]>;
 }
 declare global {
   interface Window {
@@ -99,6 +103,62 @@ test('eating a smaller object grows the player; bigger objects are left alone', 
   });
   // The pool can legitimately have no larger object left; only assert when one existed.
   if (bigResult) expect(bigResult.stateAfter).toBe(bigResult.stateBefore);
+
+  expect(errors).toEqual([]);
+});
+
+test('lensing bends the disk around the hole and the core stays black', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto('/');
+  await page.mouse.move(640, 360);
+  await page.waitForFunction(() => window.__spaghettify?.frames > 30);
+
+  // Brightness at the core's centre and just outside the shadow on the far side (above it on
+  // screen) and the near side (below), in core radii. Prey are moved away so they cannot cover the probes.
+  const probe = (quality: number) =>
+    page.evaluate(async (quality) => {
+      const d = window.__spaghettify;
+      for (const o of d.prey.objects) o.position.x += 1000;
+      d.renderer.lensing.setQuality(quality);
+      const start = d.frames;
+      while (d.frames < start + 3) await new Promise(requestAnimationFrame);
+      const { centre, coreRadius } = d.renderer.lensing;
+      const cx = centre.x * innerWidth;
+      const cy = (1 - centre.y) * innerHeight;
+      const rc = coreRadius * innerHeight;
+      const lum = async (dx: number, dy: number) => {
+        const [r, g, b] = await d.readPixel(cx + dx * rc, cy + dy * rc);
+        return (r + g + b) / 3;
+      };
+      return {
+        core: await lum(0, 0),
+        far: Math.min(await lum(0, -1.3), await lum(-0.1, -1.3), await lum(0.1, -1.3)),
+        near: Math.max(await lum(0, 1.3), await lum(-0.1, 1.3), await lum(0.1, 1.3)),
+      };
+    }, quality);
+
+  const flat = await probe(0);
+  const lensed = await probe(2);
+  // The core is drawn after lensing and bloom: pure black either way.
+  expect(flat.core).toBeLessThan(3);
+  expect(lensed.core).toBeLessThan(3);
+  // Unbent, the far side of the disk hugs the core. Lensing lifts it, opening a dark gap.
+  expect(flat.far).toBeGreaterThan(50);
+  expect(lensed.far).toBeLessThan(20);
+  // The near side is in front of the hole and does not bend.
+  expect(flat.near).toBeGreaterThan(50);
+  expect(lensed.near).toBeGreaterThan(50);
+
+  // Resizing reallocates the depth textures the lens reads; it must keep rendering cleanly.
+  await page.setViewportSize({ width: 900, height: 700 });
+  const resized = await probe(2);
+  expect(resized.core).toBeLessThan(3);
+  expect(resized.near).toBeGreaterThan(50);
 
   expect(errors).toEqual([]);
 });

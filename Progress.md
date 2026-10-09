@@ -1,7 +1,7 @@
 # Progress - Spaghettify
 
 ## Next session
-M3 Gravitational lensing shader. Recommended: Opus 5.5, xhigh (per milestone list). Screen-space post pass that bends the background (stars, prey, the disk's own image) around the player. Must slot in before bloom and keep `CorePass` (core redrawn after bloom) working. User should also playtest M1 feel and the M2 disk first and report tweaks to `GROWTH`, `PREY`, `DISK`, `BLOOM`.
+M4 Spaghettification (tidal stretch on large objects). Recommended: Opus 5.5, high (per milestone list). Stretch big prey toward the hole as they fall in, in the prey vertex shader (the prey are one InstancedMesh). Prey stay on layer 0, so the lens bends the stretched shapes for free; keep them opaque so they write alpha 1 (see the alpha mask contract under M3). User should first playtest M1, M2 and M3 and report tweaks to `GROWTH`, `PREY`, `DISK`, `BLOOM`, `LENSING`.
 
 ## Milestones
 Suggested model/effort in brackets.
@@ -9,7 +9,7 @@ Suggested model/effort in brackets.
 - [x] M0 Scaffold, git, controllable player, bloom [Sonnet 5.5, medium] (2026-10-08)
 - [x] M1 Core loop: eat smaller objects, grow, camera zoom scales with size [Sonnet 5.5, high] (2026-10-08, awaiting user playtest)
 - [x] M2 Accretion disk shader [Opus 5.5, high] (2026-10-09, awaiting user playtest)
-- [ ] M3 Gravitational lensing shader [Opus 5.5, xhigh]
+- [x] M3 Gravitational lensing shader [Opus 5.5, xhigh] (2026-10-09, awaiting user playtest)
 - [ ] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high]
 - [ ] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high]
 - [ ] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium]
@@ -41,10 +41,22 @@ Suggested model/effort in brackets.
   - `src/shaders/accretionDisk.{vert,frag}.glsl`: Shakura-Sunyaev temperature profile, blackbody colour, relativistic Doppler beaming (left side brighter and bluer with CCW spin), Keplerian swirl with a two-phase flow-map cross-fade so the turbulence never winds up. `src/shaders/lib/{simplex3d,blackbody}.glsl` included via vite-plugin-glsl `#include`.
   - `src/shaders/photonRing.{vert,frag}.glsl`: thin ring hugging the shadow for a crisp edge.
   - Heat (0..1) drives outer radius, thickness, temperature (3800 K to 6000 K) and brightness. Heat = growth (log of eatenMass / startMass) plus activity (each meal adds gained / mass, decays). Fast rise, slow cool. All in `DISK` and `PHOTON_RING` config.
-  - `src/render/CorePass.ts`: redraws the core (camera layer 1) after bloom, depth-tested against the scene depth, so glow never washes over the shadow. Toggle `BLOOM.keepCoreBlack`.
+  - `src/render/CorePass.ts`: redraws the core (`CORE_LAYER`) after bloom, depth-tested against the scene depth, so glow never washes over the shadow. Toggle `BLOOM.keepCoreBlack`.
   - Renderer now uses ACES tone mapping (`RENDER.toneMappingExposure`). Bloom retuned to 0.4 / 0.12 / 1.0.
   - Smoke test asserts `player.disk.heat` rises after eating.
   - Judged by screenshot (SwiftShader) at heat 0, ~0.6 and 1. Animation (swirl speed, flow cross-fade pulsing) not yet judged by a human.
+
+- 2026-10-09 M3: gravitational lensing.
+  - Pipeline (`src/render/Renderer.ts`): RenderPass (layer 0: stars, prey) > `LensingPass` > bloom > `CorePass` > output. Both composer buffers carry a `DepthTexture`.
+  - `src/render/LensingPass.ts` + `src/shaders/lensing.{vert,frag}.glsl`: full-screen thin point-mass lens (deflection E * (E/r)^falloff, smooth window to zero at `radius`). Writes the bent colour AND the bent depth (`gl_FragDepth`), then draws the hole's own parts on top (`CORE_LAYER` core, `OVERLAY_LAYER` disk and photon ring), depth-tested against it. So the core is never bent and CorePass still finds a valid depth after the swap. Centre and core radius come from projecting `player.position` and `player.radius` each frame (exposed as `lensing.centre`, `lensing.coreRadius`).
+  - Two layers: the far background (stars) bends with `einsteinRadius` 4; play-plane things (prey, disk) bend with `planeEinsteinRadius` 1.6, scaled by how far behind the hole they are (smoothstep from `planeDepthSoft` in front to `planeDepthRange` behind). Prey in front of the hole do not bend; prey behind it arc around.
+  - Scene alpha is the layer mask: clear alpha 0, prey write 1, the starfield uses CustomBlending so it never writes alpha. Filtered alpha also stops bilinear background samples from picking up prey edges.
+  - The disk bends itself in its vertex shader (`src/shaders/lib/lensVertex.glsl`, forward map with Newton steps) with the same lens (`lib/lens.glsl`, shared uniforms in `src/render/lensUniforms.ts`). Result: the near side hugs the core, the far side lifts and opens a dark crescent above it.
+  - `src/render/layers.ts` holds `CORE_LAYER` (1) and `OVERLAY_LAYER` (2). The core is no longer on layer 0.
+  - Quality: `lensing.setQuality(level)` indexes `LENSING.samples` (0 off, 1 tap, 4 taps inside `sampleZone` x E). Off also stops the disk bending.
+  - `STARFIELD.count` 2500 to 9000 so the lens has enough stars to visibly bend.
+  - Smoke test 3: core pixel black with the lens on and off, far side of the disk dark only when lensed, near side bright in both, still clean after a resize. Uses `__spaghettify.readPixel` (reads the frame right after it renders) and `renderer.lensing`.
+  - Judged by screenshot (SwiftShader): arcs and dashes around the hole, a full Einstein ring when a star sits behind it, prey behind the hole lifted, big prey in front still cover the core. Perf (GTX 1070 Ti, 3840x2160 render): whole frame about 2.4 ms at quality 0 or 1, 2.6 ms at quality 2. No D3D shader warnings.
 
 ## In progress
 (nothing)
@@ -62,11 +74,21 @@ Suggested model/effort in brackets.
 - 2026-10-09: Core redrawn after bloom (CorePass) instead of fighting bloom settings; bloom can stay pretty without softening the shadow.
 - 2026-10-09: ACES tone mapping added because the disk is HDR. Fed disks were capped near 6000 K and given a saturation boost because hotter blackbody colours read as grey-white after tone mapping.
 
+- 2026-10-09: The hole's own parts are kept out of the lensed image. A lensed image that contains the core magnifies the shadow into a big black annulus. The disk and photon ring are drawn after the lens; the disk bends itself per vertex.
+- 2026-10-09: Bending scales with depth behind the hole (as real lensing does) instead of one uniform warp. A uniform warp pushed the whole disk away from the core and made nearby prey appear far from where they are. Stars get the strong lens, prey and the disk a weaker one.
+- 2026-10-09: Scene alpha is the play-plane mask instead of depth or an extra render target: it is free, and filtered alpha also kills bilinear ghost edges. Contract: any future layer-0 effect that is not a solid play-plane object must leave alpha alone.
+- 2026-10-09: Background hidden behind a prey in the unbent image falls back to the plane-bent background instead of black, so a future non-black backdrop cannot show dark shadows behind prey.
+
 ## Known bugs
+- Lens: the squeezed zone inside the Einstein ring (under the disk and in the crescent above the core) can twinkle while moving. Quality 2 supersamples it with 4 taps; add taps or a low-res fallback if the playtest shows shimmer.
+- Lens: near a prey close to the hole, stars bent with the plane strength sit next to stars bent with the full strength, so star positions jump slightly there. Not noticeable in screenshots.
+- Lens: a star exactly behind the hole makes an Einstein ring with faint beads (magnified texels of a small star sprite). Rare and brief.
+- Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. Reads as being pulled in; judge in playtest.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
 - Smoke test "bigger object not eaten" can in theory flake if the player grows enough from a stray meal during its 300 ms window.
 - Disk fill cost: 3 layers x 2 flow phases x 3 noise octaves per pixel. Fine on desktop; unverified on a phone. M8 can drop `DISK.layers` or `noiseOctaves` per quality level.
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 
 ## Open questions
-- Not yet playtested on a phone (no touch input until M7).
+- Not yet playtested on a phone (no touch input until M7). Lens cost on a phone unknown; drop it to quality 1 first.
+- Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?

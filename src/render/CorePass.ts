@@ -1,13 +1,12 @@
 import * as THREE from 'three';
 import { Pass } from 'three/examples/jsm/postprocessing/Pass.js';
-
-/** Camera layer for objects that must stay pure black after bloom (the event horizon core). */
-export const CORE_LAYER = 1;
+import { CORE_LAYER } from './layers';
 
 /**
  * Redraws objects on CORE_LAYER after bloom, depth-tested against the scene depth that is still
- * attached to the read buffer. Bloom glow then stops at the shadow's edge, so the core stays crisp,
- * while anything in front of the core (prey falling in) still covers it.
+ * attached to the read buffer (the lensing pass writes the bent scene depth there). Bloom glow then
+ * stops at the shadow's edge, so the core stays crisp, while anything in front of the core
+ * (prey falling in) still covers it.
  */
 export class CorePass extends Pass {
   constructor(

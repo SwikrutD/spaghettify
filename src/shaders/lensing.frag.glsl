@@ -1,0 +1,106 @@
+// Gravitational lensing post pass. Bends the rendered scene around the black hole and writes the
+// bent depth, so the hole's own parts (drawn next) and CorePass depth-test against the bent image.
+// The hole itself is not in the input image: its core, disk and photon ring are drawn afterwards.
+//
+// Two layers. The far background (stars, empty sky) bends at full strength. Things on the play
+// plane (prey) bend by how far behind the hole the plane is at that pixel, so prey in front of the
+// hole stay put and prey behind it arc around. The scene's alpha tells them apart: plane objects
+// write 1, the cleared sky is 0 and the stars leave it alone. Filtered alpha also marks the
+// edge texels, so a bilinear background sample never drags in a sliver of a prey.
+
+#include lib/lens.glsl
+
+uniform sampler2D tColor;
+uniform sampler2D tDepth;
+uniform float uLensOn;
+// Lens centre in uv, and the scale from a uv offset to player radii (aspect corrected).
+uniform vec2 uCentre;
+uniform vec2 uUvToLens;
+uniform vec2 uTexel;
+// Supersample inside this radius (player radii), where the image is squeezed hardest.
+uniform float uSampleZone;
+// Play plane in view space, to find how far behind the hole it is at each pixel.
+uniform vec2 uTanHalfFov;
+uniform vec3 uPlaneNormal;
+uniform vec3 uLensView;
+uniform float uPlayerRadius;
+
+varying vec2 vUv;
+
+// Rotated grid. Taking the first two gives a diagonal pair.
+const vec2 SAMPLE_OFFSETS[4] = vec2[](vec2(0.125, 0.375), vec2(-0.125, -0.375), vec2(0.375, -0.125), vec2(-0.375, 0.125));
+
+// How far behind the hole (player radii, along the view axis) the play plane is at this pixel.
+float planeBehind(vec2 uv) {
+  vec3 ray = vec3((uv * 2.0 - 1.0) * uTanHalfFov, -1.0);
+  float facing = dot(uPlaneNormal, ray);
+  if (facing > -1e-4) return 1e4;
+  float depth = dot(uPlaneNormal, uLensView) / facing;
+  return (depth + uLensView.z) / uPlayerRadius;
+}
+
+bool onScreen(vec2 uv) {
+  return all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
+}
+
+// Where the light seen at offset dir * r (player radii) from the centre came from, as a uv.
+vec2 sourceUv(vec2 dir, float r, float deflection) {
+  return uCentre + dir * (r - deflection) / uUvToLens;
+}
+
+// Bent colour and depth seen at uv. One exit and explicit LOD (the targets have no mipmaps) keep
+// the D3D shader compiler quiet about derivatives in the supersampling loop.
+vec3 lensSample(vec2 uv, out float depth) {
+  vec2 offset = (uv - uCentre) * uUvToLens;
+  float r = max(length(offset), 1e-4);
+  vec2 dir = offset / r;
+  bool inCore = r < 1.0;
+  depth = 1.0;
+  vec3 color = vec3(0.0);
+
+  // Play plane first, since it is in front of the background.
+  float deflection = lensDeflection(r, uLensPlaneEinstein, lensDepthWeight(planeBehind(uv)));
+  vec2 uvPlane = sourceUv(dir, r, deflection);
+  vec4 plane = onScreen(uvPlane) ? textureLod(tColor, uvPlane, 0.0) : vec4(0.0);
+  // Over the core only a primary image may show (a prey in front of the hole). A flipped
+  // secondary image there would be light that fell into the hole.
+  if (plane.a > 0.5 && !(inCore && r <= deflection)) {
+    color = plane.rgb;
+    depth = textureLod(tDepth, uvPlane, 0.0).x;
+  } else if (!inCore) {
+    // (Inside the core the colour does not matter: the core is drawn over it afterwards.)
+    vec2 uvFar = sourceUv(dir, r, lensDeflection(r, uLensEinstein, 1.0));
+    // Light from beyond the screen edge is unknown; it is mostly dark sky.
+    if (onScreen(uvFar)) {
+      vec4 far = textureLod(tColor, uvFar, 0.0);
+      // If that background is hidden behind a plane object in the unbent image, fall back to the
+      // background bent like the plane (clear there, or we would have used it above) rather than
+      // leave a dark gap.
+      color = far.a == 0.0 ? far.rgb : plane.rgb;
+    }
+  }
+  return color;
+}
+
+void main() {
+  float r = length((vUv - uCentre) * uUvToLens);
+  vec3 color;
+  float depth;
+  if (uLensOn < 0.5 || r >= uLensRadius) {
+    color = textureLod(tColor, vUv, 0.0).rgb;
+    depth = textureLod(tDepth, vUv, 0.0).x;
+  } else {
+    color = lensSample(vUv, depth);
+#if LENS_SAMPLES > 1
+    if (r < uSampleZone) {
+      // Depth for the core's depth test stays from the centre sample.
+      vec3 sum = vec3(0.0);
+      float sampleDepth;
+      for (int i = 0; i < LENS_SAMPLES; i++) sum += lensSample(vUv + SAMPLE_OFFSETS[i] * uTexel, sampleDepth);
+      color = sum / float(LENS_SAMPLES);
+    }
+#endif
+  }
+  gl_FragColor = vec4(color, 1.0);
+  gl_FragDepth = depth;
+}

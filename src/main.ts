@@ -19,7 +19,7 @@ keyLight.position.set(...LIGHTING.keyPosition);
 scene.add(createStarfield(), player.group, prey.mesh, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
 
 const gameCamera = new GameCamera(player.position, player.radius);
-const renderer = new Renderer(canvas, scene, gameCamera.camera);
+const renderer = new Renderer(canvas, scene, gameCamera.camera, player);
 const input = new InputManager([new KeyboardInput(), new MouseInput(canvas)]);
 
 function resize(): void {
@@ -32,7 +32,15 @@ window.addEventListener('resize', resize);
 resize();
 
 // Debug handle used by the Playwright smoke test.
-const debug = { frames: 0, player, prey };
+const pixelReads: { x: number; y: number; resolve: (rgb: number[]) => void }[] = [];
+const debug = {
+  frames: 0,
+  player,
+  prey,
+  renderer,
+  /** Final RGB at a canvas pixel (CSS pixels, y down), read right after the next frame renders. */
+  readPixel: (x: number, y: number) => new Promise<number[]>((resolve) => pixelReads.push({ x, y, resolve })),
+};
 (window as unknown as { __spaghettify: typeof debug }).__spaghettify = debug;
 
 let last = performance.now();
@@ -44,6 +52,7 @@ function frame(now: number): void {
   prey.update(dt);
   gameCamera.update(dt, player.position, player.radius);
   renderer.render();
+  for (const read of pixelReads.splice(0)) read.resolve(renderer.readPixel(read.x, read.y));
   debug.frames++;
   requestAnimationFrame(frame);
 }

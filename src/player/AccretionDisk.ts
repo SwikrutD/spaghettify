@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { DISK, PHOTON_RING } from '../config';
+import { OVERLAY_LAYER } from '../render/layers';
+import { lensUniforms } from '../render/lensUniforms';
 import diskVert from '../shaders/accretionDisk.vert.glsl';
 import diskFrag from '../shaders/accretionDisk.frag.glsl';
 import ringVert from '../shaders/photonRing.vert.glsl';
@@ -50,6 +52,8 @@ export class AccretionDisk {
       uOuterSoftness: num(DISK.outerSoftness),
       uLayerFalloff: num(DISK.layerFalloff),
       uLayerNorm: num(layerNorm(DISK.layers, DISK.layerFalloff)),
+      // The disk is drawn over the lensed image and bends itself (see lensVertex.glsl).
+      ...lensUniforms,
     };
     const disk = new THREE.Mesh(
       createLayeredRing(DISK.layers),
@@ -95,6 +99,10 @@ export class AccretionDisk {
       }),
     );
     ring.frustumCulled = false;
+
+    // Drawn on top of the lensed scene by LensingPass rather than bent by it (the disk bends itself).
+    disk.layers.set(OVERLAY_LAYER);
+    ring.layers.set(OVERLAY_LAYER);
 
     this.group.add(disk, ring);
     this.applyHeat();

@@ -160,6 +160,37 @@ export const PHOTON_RING = {
   kelvinFactor: 0.9,
 } as const;
 
+export const LENSING = {
+  /**
+   * Einstein radius for the far background (stars), in player radii. A star directly behind the hole
+   * is smeared into a ring this far from its centre; inside the ring is a squeezed, flipped image of
+   * the sky on the far side. This is the main strength knob.
+   */
+  einsteinRadius: 4,
+  /**
+   * Einstein radius for things on the play plane (prey and the disk's own image), once they are
+   * planeDepthRange behind the hole. Kept well below einsteinRadius so prey stay readable.
+   */
+  planeEinsteinRadius: 1.6,
+  /**
+   * Real lensing grows with the source's distance behind the lens: nothing in front of the hole bends.
+   * Play-plane bending ramps from zero at planeDepthSoft player radii in front of the hole to full at
+   * planeDepthRange behind it (depth measured along the view axis).
+   */
+  planeDepthRange: 3,
+  planeDepthSoft: 0.5,
+  /** Bending falls off as distance ^ -falloff. 1 is a point mass; higher keeps it tighter around the hole. */
+  falloff: 1,
+  /** Lens reach in player radii. The bending fades smoothly to zero here so the lens has a finite footprint. */
+  radius: 18,
+  /** Detail level, an index into samples. M8 lowers it on slow devices. */
+  quality: 2,
+  /** Samples per pixel near the ring, where the image is squeezed hardest, per quality level. 0 = lensing off. */
+  samples: [0, 1, 4],
+  /** Supersampled zone radius as a multiple of einsteinRadius. */
+  sampleZone: 1.3,
+} as const;
+
 export const BLOOM = {
   /** Only the hot inner disk and the photon ring exceed the threshold (pre tone mapping HDR). */
   strength: 0.4,
@@ -180,7 +211,8 @@ export const RENDER = {
 } as const;
 
 export const STARFIELD = {
-  count: 2500,
+  /** Dense enough that the lens always has stars to bend into arcs. */
+  count: 9000,
   /** Half-size of the square (world units) that stars cover. */
   extent: 300,
   /** Stars sit below the play plane by this depth range for a parallax feel. */

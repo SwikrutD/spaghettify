@@ -2,6 +2,9 @@
 // in a few layers (aLayer in -1..1). It is remapped here to [uInner, uOuter] so the mesh always
 // hugs the visible disk, and the layers are pushed apart in Z to give a flared, thick disk.
 // Local units are player radii (the black core has radius 1). Local +Z is world up.
+// The disk is drawn over the lensed scene, so it applies the gravitational lens to itself.
+
+#include lib/lensVertex.glsl
 
 attribute float aLayer;
 
@@ -22,5 +25,6 @@ void main() {
 
   vLocal = p;
   vLayer = aLayer;
-  gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  vec4 viewPos = modelViewMatrix * vec4(p, 1.0);
+  gl_Position = lensWarp(projectionMatrix * viewPos, viewPos);
 }
