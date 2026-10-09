@@ -1,15 +1,15 @@
 # Progress - Spaghettify
 
 ## Next session
-M7 part 2: title screen (play button, best score, nickname entry), pause menu (resume, quit run, pause on tab blur) and settings panel (music and SFX sliders, mute, control scheme, quality level). Recommended: Sonnet 5.5, medium (UI work, per the milestone list). Reuse `AudioEngine` setters and `AudioPanel`; fold the corner panel into the settings panel. Listen to the game first (audio is judged by ear, not yet heard by a human) and report tweaks to `AUDIO` in src/config/index.ts.
+M7 part 3: mobile touch controls (finger follow and a virtual joystick, toggle in settings, remembered in localStorage), gamepad left stick, and juice (screen shake or hit feedback, eat pops, tier set piece polish). Recommended: Sonnet 5.5, medium (UI and input work, per the milestone list). Add the touch sources as `InputSource`s registered in `InputManager` in `src/main.ts` (ids 'touch', 'gamepad') and extend `Settings.scheme` plus the control scheme select in `SettingsPanel`. Test on a phone if possible.
 How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste the start prompt below.
 
 ```
-Start Milestone 7 part 2 (title, pause and settings UI) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 7 part 3 (mobile touch controls, gamepad and juice) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: a title screen (play button, best score from localStorage spaghettify.best, nickname entry saved in localStorage), a pause menu (resume and quit run, also pauses on tab blur and with Escape; the game loop must stop advancing hunger and prey while paused) and a settings panel (music and SFX sliders and mute using the existing AudioEngine setters, control scheme toggle for mouse follow vs keyboard, quality level wired to renderer.lensing.setQuality). Replace the corner AudioPanel with the settings panel. The run should not start until Play is pressed. All input still goes through InputManager. Player-facing copy: no em dashes, no serial commas, ASCII quotes. Do not build mobile touch controls or juice (part 3).
+Goal: touch input with a finger follow mode and a virtual joystick mode, chosen in the settings panel and remembered in localStorage (extend Settings.scheme and the control scheme select; keep mouse and keyboard working); gamepad left stick support; light juice (eat feedback, camera shake on big meals or tier-up). All input goes through InputManager as InputSources. Touch must also work on the title, pause and settings menus (buttons are DOM). No em dashes, no serial commas, ASCII quotes in player-facing copy.
 
-Done when: tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test; update the existing tests for the title screen so they press Play first and add tests for pause, settings persistence and the title screen). Update Progress.md and commit at the end.
+Done when: tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test; add tests for touch follow, the joystick and settings persistence using Playwright touch emulation where practical). Update Progress.md and commit at the end.
 ```
 
 ## Milestones
@@ -22,7 +22,7 @@ Suggested model/effort in brackets.
 - [x] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest)
-- [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (split: part 1 audio DONE 2026-10-09, part 2 title/pause/settings, part 3 mobile controls and juice)
+- [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (split: part 1 audio DONE 2026-10-09, part 2 title/pause/settings DONE 2026-10-09, part 3 mobile controls and juice)
 - [ ] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high]
 - [ ] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium]
 - [ ] Post-MVP: more tiers, daily seed, leaderboard, multiplayer
@@ -106,6 +106,15 @@ Suggested model/effort in brackets.
   - Smoke tests 8 to 10: context is null before a click and exists after it; eating counts an eat sound; mute by button and M key (gains 0, aria-pressed, localStorage) and persists after reload; tier-up, warning and evaporate each trigger once and restart is clean; with AudioContext and localStorage removed the game runs with no errors.
   - Not heard by a human. Headless tests only prove triggers and wiring, not how it sounds.
 
+- 2026-10-09 M7 part 2: title, pause and settings UI (awaiting human playtest).
+  - Run state lives in `src/main.ts` (`mode`: title, playing, paused). Only 'playing' advances input, tiers, player, hunger, prey, audio update and camera; other modes still render (frozen scene behind the menu). Debug handle has `mode` and `settings`.
+  - `src/ui/TitleScreen.ts`: SPAGHETTIFY, best score (`spaghettify.best`, now loaded and saved here), nickname field (`spaghettify.nickname`, cleaned by `cleanNickname`: letters, digits, space, _ . -, max 16), PLAY (Enter works) and SETTINGS. The run does not start until Play.
+  - `src/ui/PauseMenu.ts`: resume, settings, quit run (resets the run and returns to the title) plus a small corner pause button during a live run. Escape toggles pause; window blur and tab hide pause a live run. Pause is not offered once the score screen is up.
+  - `src/ui/SettingsPanel.ts` (replaces and deletes `AudioPanel`): music and SFX sliders, mute button, control scheme select (Mouse follow, Keyboard only), quality select (Low, Medium, High, indexes `LENSING.samples`). The M key still mutes anywhere except in a text field. Escape closes settings first.
+  - `src/settings/Settings.ts`: scheme and quality persisted in `spaghettify.settings`, applied at startup and on change (`InputManager.setEnabled('mouse', ...)`, `renderer.lensing.setQuality`). `InputManager` now takes `{ id, source }` entries. `STORAGE` and `MENU` blocks in config. Shared DOM helpers in `src/ui/dom.ts`.
+  - Smoke tests: every existing test presses Play first (`startRun`, synthetic click so the pointer stays put; audio tests use a real click). New tests: title (best, idle until Play, nickname clean and persist), pause (Escape, button, blur, resume, settings, quit), settings persistence and keyboard-only ignoring the mouse. 13 tests pass.
+  - Not judged by a human: menu look and layout, phone layout of the menus.
+
 ## In progress
 (nothing)
 
@@ -141,11 +150,13 @@ Suggested model/effort in brackets.
 - 2026-10-09: The fail floor is relative to the run's peak mass (half of it) so starving matters at every size; an absolute floor alone would take a minute to hit at planet mass. Mass lost to hunger is never regained, so the floor only moves up.
 - 2026-10-09: Score = mass eaten x 1000 so the first meals (dust grains of mass 0.0025) still count.
 - 2026-10-09: Audio is event-driven through small hooks (`Player.onEat`, `TierDirector.onTierUp`, per-frame `audio.update` for the phase and hunger level) so game logic never imports audio. The AudioContext is made lazily on the first gesture. Grow chime is radius-step based (not every meal) to avoid noise.
+- 2026-10-09: Menus are plain DOM overlays driven by a three-state `mode` in main.ts instead of a state machine class; the scene keeps rendering when not playing so resize, screenshots and tests keep working. Control scheme setting disables the mouse source rather than the keyboard (keys stay as a fallback in mouse mode).
 - 2026-10-09: Hunger runs on game time (so it pauses in tier-up slow motion); the final evaporation runs on real time.
 
 ## Known bugs
 - Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
-- Audio: the volume sliders are disabled while muted, and the corner panel overlaps nothing but is placeholder UI until part 2.
+- Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score. The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
+- Menus: the music/drone keeps playing at its last level while paused.
 - Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.
 - Spaghetti: a stream behind the hole is lifted by the lens and wraps along the shadow edge instead of visibly entering the core. Looks like a photon-ring wrap; judge in playtest.
 - Spaghetti: the 6x stretched rock shows its low-poly facets (mesh detail 2). Fine with the flat-shaded look; raise `PREY.meshDetail` if it reads badly.
@@ -163,7 +174,7 @@ Suggested model/effort in brackets.
 
 ## Open questions
 - Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.
-- Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. No pause menu yet, so a tab left idle in the background still evaporates (frames are capped at 0.05 s per frame, so it is slow when hidden).
+- Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. Pause now freezes hunger.
 - Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
 - Not yet playtested on a phone (no touch input until M7). Lens cost on a phone unknown; drop it to quality 1 first.
 - Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?

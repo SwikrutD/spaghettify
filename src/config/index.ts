@@ -391,3 +391,16 @@ export const AUDIO = {
     sweepTo: 28,
   },
 } as const;
+
+export const STORAGE = {
+  best: 'spaghettify.best',
+  nickname: 'spaghettify.nickname',
+  settings: 'spaghettify.settings',
+} as const;
+
+export const MENU = {
+  nicknameMaxLength: 16,
+  /** Display names for the quality levels, indexed like LENSING.samples. */
+  qualityNames: ['Low', 'Medium', 'High'],
+  defaultScheme: 'mouse',
+} as const;

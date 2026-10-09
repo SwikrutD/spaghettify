@@ -1,7 +1,9 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 
 interface Debug {
   frames: number;
+  mode: string;
+  settings: { scheme: string; quality: number };
   player: {
     position: { x: number; y: number; z: number };
     radius: number;
@@ -52,6 +54,19 @@ declare global {
   }
 }
 
+/** The title screen holds the run until Play is pressed. */
+async function startRun(page: Page, realClick = false): Promise<void> {
+  // A synthetic click leaves the pointer where the test put it; a real one is a gesture that unlocks audio.
+  if (realClick) await page.getByTestId('play').click();
+  else await page.getByTestId('play').dispatchEvent('click');
+  await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
+}
+
+async function openSettingsFromPause(page: Page): Promise<void> {
+  await page.keyboard.press('Escape');
+  await page.getByTestId('pause-settings').click();
+}
+
 test('game loads, renders frames without console errors and the player moves', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => {
@@ -61,6 +76,7 @@ test('game loads, renders frames without console errors and the player moves', a
 
   await page.goto('/');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
 
   const start = await page.evaluate(() => ({ ...window.__spaghettify.player.position }));
 
@@ -96,6 +112,7 @@ test('eating a smaller object grows the player; bigger objects are left alone', 
 
   await page.goto('/');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
 
   const before = await page.evaluate(() => {
     const { player, prey } = window.__spaghettify;
@@ -145,6 +162,7 @@ test('lensing bends the disk around the hole and the core stays black', async ({
   await page.goto('/');
   await page.mouse.move(640, 360);
   await page.waitForFunction(() => window.__spaghettify?.frames > 30);
+  await startRun(page);
 
   // Brightness at the core's centre and just outside the shadow on the far side (above it on
   // screen) and the near side (below), in core radii. Prey are moved away so they cannot cover the probes.
@@ -201,6 +219,7 @@ test('edible prey spaghettify: they stretch toward the hole and drain into the c
   await page.goto('/');
   await page.mouse.move(640, 360);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
 
   const result = await page.evaluate(async () => {
     const d = window.__spaghettify;
@@ -299,6 +318,7 @@ test('crossing a mass threshold changes tier: prey table, entity budget and came
   await page.goto('/');
   await page.mouse.move(240, 135);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
   await page.evaluate(() => (window.__spaghettify.hunger.enabled = false));
 
   // Grow to just under a tier threshold, let the radius catch up, then eat one more object to cross it.
@@ -387,6 +407,7 @@ test('speed holds on screen as the hole grows', async ({ page }) => {
   await page.setViewportSize({ width: 480, height: 270 });
   await page.goto('/');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
   await page.evaluate(() => (window.__spaghettify.hunger.enabled = false));
   await page.mouse.move(470, 135);
 
@@ -427,6 +448,7 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   await page.goto('/');
   await page.mouse.move(240, 135);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
 
   // Eat one thing so the score screen has a biggest meal to report.
   await page.evaluate(async () => {
@@ -536,7 +558,7 @@ test('audio: the context is created after a click, events trigger sounds, and th
   // Browsers block audio before a gesture: no context yet, and the game runs fine without one.
   expect(await page.evaluate(() => window.__spaghettify.audio.context)).toBeNull();
 
-  await page.mouse.click(640, 360);
+  await startRun(page, true);
   await page.waitForFunction(() => window.__spaghettify.audio.context !== null);
   expect(await page.evaluate(() => window.__spaghettify.audio.state)).not.toBe('closed');
 
@@ -551,6 +573,7 @@ test('audio: the context is created after a click, events trigger sounds, and th
   await page.waitForFunction(() => (window.__spaghettify.audio.played.eat ?? 0) > 0);
 
   // Mute toggle: button and the M key. State, aria-pressed, gains and localStorage all follow.
+  await openSettingsFromPause(page);
   const button = page.getByTestId('mute-toggle');
   await expect(button).toHaveAttribute('aria-pressed', 'false');
   expect(await page.evaluate(() => window.__spaghettify.audio.gainFor('music'))).toBeGreaterThan(0);
@@ -583,7 +606,7 @@ test('audio: tier-up, hunger warning and evaporation each trigger their sound; r
   await page.setViewportSize({ width: 480, height: 320 });
   await page.goto('/');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
-  await page.mouse.click(240, 160);
+  await startRun(page, true);
   await page.waitForFunction(() => window.__spaghettify.audio.context !== null);
 
   // Tier-up: set the mass just under tier 2 and eat something.
@@ -632,8 +655,11 @@ test('audio: with Web Audio unavailable the game still runs and nothing errors',
   });
   await page.goto('/');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
-  await page.mouse.click(640, 360);
+  await startRun(page, true);
+  await openSettingsFromPause(page);
   await page.getByTestId('mute-toggle').click();
+  await page.getByTestId('settings-back').click();
+  await page.getByTestId('resume').click();
   await page.evaluate(() => {
     const { player, prey } = window.__spaghettify;
     const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
@@ -643,5 +669,159 @@ test('audio: with Web Audio unavailable the game still runs and nothing errors',
   });
   await page.waitForFunction(() => window.__spaghettify.player.eatenCount > 0);
   expect(await page.evaluate(() => window.__spaghettify.audio.context)).toBeNull();
+  expect(errors).toEqual([]);
+});
+
+test('title screen holds the run until Play, shows the best score and saves the nickname', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem('seeded')) {
+      sessionStorage.setItem('seeded', '1');
+      localStorage.setItem('spaghettify.best', '12345');
+    }
+  });
+
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await expect(page.getByTestId('title-screen')).toBeVisible();
+  await expect(page.getByTestId('title-best')).toHaveText('BEST 12,345');
+  expect(await page.evaluate(() => window.__spaghettify.mode)).toBe('title');
+
+  // Nothing advances on the title screen, even with the pointer far from the centre and a key held.
+  await page.mouse.move(1000, 360);
+  await page.keyboard.down('KeyD');
+  await page.waitForTimeout(600);
+  await page.keyboard.up('KeyD');
+  const idle = await page.evaluate(() => ({
+    x: window.__spaghettify.player.position.x,
+    idle: window.__spaghettify.hunger.idle,
+    run: window.__spaghettify.hunger.runTime,
+  }));
+  expect(idle).toEqual({ x: 0, idle: 0, run: 0 });
+
+  // The nickname is cleaned and persists across a reload.
+  await page.getByTestId('nickname').fill('  Ba<b>y   Hole!  ');
+  expect(await page.evaluate(() => localStorage.getItem('spaghettify.nickname'))).toBe('Baby Hole');
+  await page.reload();
+  await expect(page.getByTestId('nickname')).toHaveValue('Baby Hole');
+
+  // Enter in the nickname field starts the run and the hole then moves.
+  await page.getByTestId('nickname').press('Enter');
+  await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
+  await expect(page.getByTestId('title-screen')).toBeHidden();
+  await page.mouse.move(1000, 360);
+  await page.waitForFunction(() => window.__spaghettify.player.position.x > 0.5);
+  expect(errors).toEqual([]);
+});
+
+test('pause: Escape, the pause button and tab blur freeze the run; resume and quit work', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
+  await page.mouse.move(1000, 360);
+  await page.waitForFunction(() => window.__spaghettify.hunger.idle > 0.3);
+
+  const snapshot = () =>
+    page.evaluate(() => {
+      const { player, hunger, prey } = window.__spaghettify;
+      return { x: player.position.x, idle: hunger.idle, run: hunger.runTime, px: prey.objects[0].position.x, pz: prey.objects[0].position.z };
+    });
+
+  // Escape pauses: hunger, the hole and prey all stop while frames keep rendering.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('pause-menu')).toBeVisible();
+  expect(await page.evaluate(() => window.__spaghettify.mode)).toBe('paused');
+  const a = await snapshot();
+  const frames = await page.evaluate(() => window.__spaghettify.frames);
+  await page.waitForTimeout(700);
+  expect(await snapshot()).toEqual(a);
+  expect(await page.evaluate(() => window.__spaghettify.frames)).toBeGreaterThan(frames);
+
+  // Escape resumes and time advances again.
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('pause-menu')).toBeHidden();
+  await page.waitForFunction((t) => window.__spaghettify.hunger.runTime > t + 0.2, a.run);
+
+  // The corner button pauses, Resume continues.
+  await page.getByTestId('pause-button').click();
+  await expect(page.getByTestId('pause-menu')).toBeVisible();
+  await page.getByTestId('resume').click();
+  expect(await page.evaluate(() => window.__spaghettify.mode)).toBe('playing');
+
+  // Tab blur pauses.
+  await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+  expect(await page.evaluate(() => window.__spaghettify.mode)).toBe('paused');
+
+  // Settings opened from the pause menu: Escape closes settings first and the run stays paused.
+  await page.getByTestId('pause-settings').click();
+  await expect(page.getByTestId('settings-panel')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('settings-panel')).toBeHidden();
+  expect(await page.evaluate(() => window.__spaghettify.mode)).toBe('paused');
+
+  // Quit run: back to the title screen with a fresh run, and Play starts it again.
+  await page.getByTestId('quit-run').click();
+  await expect(page.getByTestId('title-screen')).toBeVisible();
+  const fresh = await page.evaluate(() => ({ run: window.__spaghettify.hunger.runTime, mode: window.__spaghettify.mode }));
+  expect(fresh).toEqual({ run: 0, mode: 'title' });
+  await startRun(page);
+  expect(errors).toEqual([]);
+});
+
+test('settings: scheme, quality and volume persist across a reload and keyboard only ignores the mouse', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await page.getByTestId('title-settings').click();
+  await expect(page.getByTestId('settings-panel')).toBeVisible();
+  await page.getByTestId('control-scheme').selectOption('keyboard');
+  await page.getByTestId('quality').selectOption('0');
+  await page.getByTestId('music-volume').fill('0.25');
+  await page.getByTestId('sfx-volume').fill('0.5');
+  await page.getByTestId('settings-back').click();
+  await expect(page.getByTestId('title-screen')).toBeVisible();
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}'))).toEqual({ scheme: 'keyboard', quality: 0 });
+
+  // Persisted values are applied after a reload and shown in the panel.
+  await page.reload();
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'keyboard', quality: 0 });
+  await page.getByTestId('title-settings').click();
+  await expect(page.getByTestId('control-scheme')).toHaveValue('keyboard');
+  await expect(page.getByTestId('quality')).toHaveValue('0');
+  await expect(page.getByTestId('music-volume')).toHaveValue('0.25');
+  await expect(page.getByTestId('sfx-volume')).toHaveValue('0.5');
+  await page.getByTestId('settings-back').click();
+
+  // Keyboard only: the pointer no longer steers, the keys do.
+  await startRun(page);
+  await page.mouse.move(1000, 360);
+  await page.waitForTimeout(800);
+  expect(await page.evaluate(() => window.__spaghettify.player.position.x)).toBeCloseTo(0, 5);
+  await page.keyboard.down('KeyD');
+  await page.waitForFunction(() => window.__spaghettify.player.position.x > 0.5);
+  await page.keyboard.up('KeyD');
+
+  // Back to mouse follow at high quality.
+  await page.keyboard.press('Escape');
+  await page.getByTestId('pause-settings').click();
+  await page.getByTestId('control-scheme').selectOption('mouse');
+  await page.getByTestId('quality').selectOption('2');
+  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'mouse', quality: 2 });
   expect(errors).toEqual([]);
 });

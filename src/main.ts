@@ -10,11 +10,14 @@ import { Player } from './player/Player';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
 import { createStarfield } from './scene/Starfield';
+import { Settings } from './settings/Settings';
 import { TierDirector } from './spawning/TierDirector';
-import { AudioPanel } from './ui/AudioPanel';
 import { HungerOverlay } from './ui/HungerOverlay';
+import { PauseMenu } from './ui/PauseMenu';
 import { ScoreScreen } from './ui/ScoreScreen';
+import { SettingsPanel } from './ui/SettingsPanel';
 import { TierBanner } from './ui/TierBanner';
+import { loadBest, saveBest, TitleScreen } from './ui/TitleScreen';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
@@ -29,7 +32,7 @@ keyLight.position.set(...LIGHTING.keyPosition);
 scene.add(starfield.points, player.group, prey.mesh, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
 
 const audio = new AudioEngine();
-new AudioPanel(audio);
+const settings = new Settings();
 player.onEat = (_mass, what) => {
   if (what) audio.eat(what.radius, player.radius);
 };
@@ -45,22 +48,6 @@ tiers.onTierUp = (tier, index) => {
 const hunger = new Hunger(player);
 const hungerOverlay = new HungerOverlay();
 const scoreScreen = new ScoreScreen();
-
-const BEST_KEY = 'spaghettify.best';
-function loadBest(): number {
-  try {
-    return Number(localStorage.getItem(BEST_KEY)) || 0;
-  } catch {
-    return 0;
-  }
-}
-function saveBest(score: number): void {
-  try {
-    localStorage.setItem(BEST_KEY, String(score));
-  } catch {
-    // Storage can be blocked; the best score is a convenience.
-  }
-}
 
 // Run over: score = mass eaten (scaled to points), shown with the biggest meal and the tier reached.
 hunger.onEnd = () => {
@@ -78,10 +65,11 @@ hunger.onEnd = () => {
     eatenCount: player.eatenCount,
     seconds: hunger.runTime,
   });
+  refreshMenus();
 };
 
 // Fresh run: player, tier, camera, prey pool, hunger and overlays. The camera resets before the prey (spawn distances follow it).
-scoreScreen.onRestart = () => {
+function resetRun(): void {
   player.reset();
   tiers.reset();
   gameCamera.reset(player.position, player.radius, tiers.tier.cameraScale);
@@ -90,10 +78,96 @@ scoreScreen.onRestart = () => {
   hungerOverlay.reset();
   banner.reset();
   audio.reset(player.radius);
-};
+}
 
 const renderer = new Renderer(canvas, scene, gameCamera.camera, player);
-const input = new InputManager([new KeyboardInput(), new MouseInput(canvas)]);
+const input = new InputManager([
+  { id: 'keyboard', source: new KeyboardInput() },
+  { id: 'mouse', source: new MouseInput(canvas) },
+]);
+
+// Menus and run state. The run does not advance in 'title' or 'paused'; the scene keeps rendering behind the menus.
+type Mode = 'title' | 'playing' | 'paused';
+let mode: Mode = 'title';
+const title = new TitleScreen();
+const pauseMenu = new PauseMenu();
+const settingsPanel = new SettingsPanel(audio, settings);
+let settingsReturn: 'title' | 'pause' = 'title';
+
+function applySettings(): void {
+  input.setEnabled('mouse', settings.scheme === 'mouse');
+  renderer.lensing.setQuality(settings.quality);
+}
+const syncSettingsPanel = settings.onChange;
+settings.onChange = () => {
+  syncSettingsPanel?.();
+  applySettings();
+};
+applySettings();
+
+function runLive(): boolean {
+  return mode === 'playing' && hunger.phase !== 'over';
+}
+function refreshMenus(): void {
+  pauseMenu.setState(mode === 'paused', runLive());
+}
+function setMode(next: Mode): void {
+  mode = next;
+  refreshMenus();
+}
+function pause(): void {
+  if (runLive()) setMode('paused');
+}
+function resume(): void {
+  if (mode === 'paused') setMode('playing');
+}
+function openSettings(from: 'title' | 'pause'): void {
+  settingsReturn = from;
+  settingsPanel.open();
+}
+function closeSettings(): void {
+  settingsPanel.close();
+  if (settingsReturn === 'title') title.show();
+}
+
+title.onPlay = () => {
+  title.hide();
+  setMode('playing');
+};
+title.onSettings = () => {
+  title.hide();
+  openSettings('title');
+};
+pauseMenu.onResume = resume;
+pauseMenu.onPauseRequest = pause;
+pauseMenu.onSettings = () => openSettings('pause');
+pauseMenu.onQuit = () => {
+  resetRun();
+  setMode('title');
+  title.show();
+};
+settingsPanel.onClose = closeSettings;
+scoreScreen.onRestart = () => {
+  resetRun();
+  refreshMenus();
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.repeat) return;
+  if (e.code === 'Escape') {
+    if (settingsPanel.isOpen) closeSettings();
+    else if (mode === 'playing') pause();
+    else if (mode === 'paused') resume();
+  } else if (e.code === 'KeyM' && !(e.target instanceof HTMLInputElement)) {
+    audio.toggleMute();
+  }
+});
+// Losing focus or hiding the tab pauses a live run.
+window.addEventListener('blur', pause);
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) pause();
+});
+title.show();
 
 function resize(): void {
   const w = window.innerWidth;
@@ -114,6 +188,10 @@ const debug = {
   hunger,
   hungerOverlay,
   audio,
+  settings,
+  get mode() {
+    return mode;
+  },
   allTiers: TIERS,
   camera: gameCamera,
   renderer,
@@ -122,11 +200,22 @@ const debug = {
 };
 (window as unknown as { __spaghettify: typeof debug }).__spaghettify = debug;
 
+function drawFrame(): void {
+  renderer.render();
+  for (const read of pixelReads.splice(0)) read.resolve(renderer.readPixel(read.x, read.y));
+  debug.frames++;
+  requestAnimationFrame(frame);
+}
+
 const NO_MOVE = { x: 0, y: 0 };
 let last = performance.now();
 function frame(now: number): void {
   const realDt = Math.min((now - last) / 1000, RENDER.maxFrameDt);
   last = now;
+  if (mode !== 'playing') {
+    drawFrame();
+    return;
+  }
   input.update();
   tiers.update(realDt, player.mass);
   // Game time dips into slow motion during the tier-up; the camera and overlays run on real time.
@@ -143,9 +232,6 @@ function frame(now: number): void {
   gameCamera.update(realDt, player.position, player.radius);
   starfield.update(player.position, gameCamera.viewScale);
   banner.update(tiers.flash);
-  renderer.render();
-  for (const read of pixelReads.splice(0)) read.resolve(renderer.readPixel(read.x, read.y));
-  debug.frames++;
-  requestAnimationFrame(frame);
+  drawFrame();
 }
 requestAnimationFrame(frame);
