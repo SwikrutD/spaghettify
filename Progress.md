@@ -1,7 +1,7 @@
 # Progress - Spaghettify
 
 ## Next session
-M4 Spaghettification (tidal stretch on large objects). Recommended: Opus 5.5, high (per milestone list). Stretch big prey toward the hole as they fall in, in the prey vertex shader (the prey are one InstancedMesh). Prey stay on layer 0, so the lens bends the stretched shapes for free; keep them opaque so they write alpha 1 (see the alpha mask contract under M3). User should first playtest M1, M2 and M3 and report tweaks to `GROWTH`, `PREY`, `DISK`, `BLOOM`, `LENSING`.
+M5 Spawning and size tiers (debris, asteroids/moons, planets). Recommended: Sonnet 5.5, high (per milestone list). Replace the relative-size prey pool with absolute tier tables and mass thresholds that change scene scale and prey table, with a short tier-up set piece. Keep prey in the one spaghettifying InstancedMesh (or one per tier mesh type, each with the same `createPreyMaterial`). User should first playtest M1 to M4 and report tweaks to `GROWTH`, `PREY`, `SPAGHETTI`, `DISK`, `BLOOM`, `LENSING`.
 
 ## Milestones
 Suggested model/effort in brackets.
@@ -10,7 +10,7 @@ Suggested model/effort in brackets.
 - [x] M1 Core loop: eat smaller objects, grow, camera zoom scales with size [Sonnet 5.5, high] (2026-10-08, awaiting user playtest)
 - [x] M2 Accretion disk shader [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M3 Gravitational lensing shader [Opus 5.5, xhigh] (2026-10-09, awaiting user playtest)
-- [ ] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high]
+- [x] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [ ] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high]
 - [ ] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium]
 - [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium]
@@ -58,6 +58,17 @@ Suggested model/effort in brackets.
   - Smoke test 3: core pixel black with the lens on and off, far side of the disk dark only when lensed, near side bright in both, still clean after a resize. Uses `__spaghettify.readPixel` (reads the frame right after it renders) and `renderer.lensing`.
   - Judged by screenshot (SwiftShader): arcs and dashes around the hole, a full Einstein ring when a star sits behind it, prey behind the hole lifted, big prey in front still cover the core. Perf (GTX 1070 Ti, 3840x2160 render): whole frame about 2.4 ms at quality 0 or 1, 2.6 ms at quality 2. No D3D shader warnings.
 
+- 2026-10-09 M4: spaghettification.
+  - `src/entities/preyMaterial.ts`: `createPreyMaterial()` is the old MeshStandardMaterial (flat shaded, opaque) with chunks injected via `onBeforeCompile` (fails loudly if a three.js chunk is renamed). Still one draw call, layer 0, alpha 1.
+  - `src/shaders/preySpaghettify.{pars.vert,vert}.glsl`: replaces `<project_vertex>`. In world space, around each instance centre: stretch along the hole direction, squeeze across by `stretch ^ -squeeze`, squash radial distances below `knee` core radii smoothly toward zero (nothing pokes out the far side), then rotate about the hole by `curl * ln(rc / r)` so the stream winds into a spiral with the disk's spin. Flat shading derives normals from the final position, so lighting follows the shape.
+  - `src/shaders/preyGlow.{pars.frag,frag}.glsl`: HDR emissive tidal-heating glow on parts within `glowReach` core radii (catches bloom).
+  - Per-instance attributes: `aStretch` (dirX, dirZ, stretch, curl) and `aGlow`. Uniform `uHole` (x, z, core radius) set each frame in `PreyField.update`.
+  - `PreyField`: edible prey pre-stretch on approach (gap below `onsetGap` player radii, up to `approachStretch`). When eaten: infall over `infallTimeMin..Max` (size weighted), distance shrinks as `1 - t^accelPower` while swinging `swirl` rad around the hole; stretch ramps to `maxStretch` (size weighted), curl and glow build; drains (shrinks) from `drainStart`. The infall is an offset from the hole, so it follows a moving player. `PREY.eatTime` removed. Mass is still credited at the moment of contact.
+  - Size weight = (preyRadius / (playerRadius * edibleRatio)) ^ `sizePower`. Inedible objects stay inert.
+  - Config: new `SPAGHETTI` block.
+  - Smoke test 4: no stretch far away, stretch along the hole line when close, stretch above 1.5 and aligned with the hole every frame of the infall, and by the last infall frame the object is close to the centre and drained. Reads the GPU attribute and instance matrices.
+  - Judged by screenshot (SwiftShader, frozen infall at several progress values and angles): a curved, thin stream that wraps into the core; from behind the hole the lens lifts it over the far disk. Not yet judged in motion by a human.
+
 ## In progress
 (nothing)
 
@@ -79,16 +90,24 @@ Suggested model/effort in brackets.
 - 2026-10-09: Scene alpha is the play-plane mask instead of depth or an extra render target: it is free, and filtered alpha also kills bilinear ghost edges. Contract: any future layer-0 effect that is not a solid play-plane object must leave alpha alone.
 - 2026-10-09: Background hidden behind a prey in the unbent image falls back to the plane-bent background instead of black, so a future non-black backdrop cannot show dark shadows behind prey.
 
+- 2026-10-09: Spaghettification injects into MeshStandardMaterial (`onBeforeCompile`, chunks in .glsl files) instead of a full custom ShaderMaterial, to keep three's lighting and flat shading for free.
+- 2026-10-09: Stretch happens in world space after the instance transform (not in local space), so spin does not twist the stream; the CPU passes the hole direction per instance.
+- 2026-10-09: Added a spiral curl and swirl on the infall, plus a tidal heating glow. A straight stick read as a stretched rock; the curl reads as matter falling into a spinning hole. All three can be zeroed in `SPAGHETTI`.
+
 ## Known bugs
+- Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.
+- Spaghetti: a stream behind the hole is lifted by the lens and wraps along the shadow edge instead of visibly entering the core. Looks like a photon-ring wrap; judge in playtest.
+- Spaghetti: the 6x stretched rock shows its low-poly facets (mesh detail 2). Fine with the flat-shaded look; raise `PREY.meshDetail` if it reads badly.
 - Lens: the squeezed zone inside the Einstein ring (under the disk and in the crescent above the core) can twinkle while moving. Quality 2 supersamples it with 4 taps; add taps or a low-res fallback if the playtest shows shimmer.
 - Lens: near a prey close to the hole, stars bent with the plane strength sit next to stars bent with the full strength, so star positions jump slightly there. Not noticeable in screenshots.
 - Lens: a star exactly behind the hole makes an Einstein ring with faint beads (magnified texels of a small star sprite). Rare and brief.
-- Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. Reads as being pulled in; judge in playtest.
+- Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. The M4 infall now starts from there, so it reads as being pulled in; judge in playtest.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
 - Smoke test "bigger object not eaten" can in theory flake if the player grows enough from a stray meal during its 300 ms window.
 - Disk fill cost: 3 layers x 2 flow phases x 3 noise octaves per pixel. Fine on desktop; unverified on a phone. M8 can drop `DISK.layers` or `noiseOctaves` per quality level.
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 
 ## Open questions
+- Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
 - Not yet playtested on a phone (no touch input until M7). Lens cost on a phone unknown; drop it to quality 1 first.
 - Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?

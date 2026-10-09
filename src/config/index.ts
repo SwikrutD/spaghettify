@@ -48,8 +48,6 @@ export const PREY = {
   spinSpeed: 0.8,
   /** Seconds to scale in after spawning. */
   appearTime: 0.5,
-  /** Seconds for an eaten object to shrink into the hole. */
-  eatTime: 0.22,
   /** Rock surface roughness (fraction of radius) and mesh detail. */
   roughness: 0.18,
   meshDetail: 2,
@@ -60,6 +58,41 @@ export const PREY = {
   satMax: 0.35,
   lightMin: 0.35,
   lightMax: 0.6,
+} as const;
+
+/**
+ * Spaghettification: tidal stretching of edible prey on the way into the hole. Prey stretch along the
+ * line to the hole and thin out across it. Bigger edible prey (relative to the player) stretch more and
+ * fall in more slowly. Inedible objects are inert.
+ */
+export const SPAGHETTI = {
+  /** Edible prey start to stretch when the gap between their surface and the core is below this (player radii). */
+  onsetGap: 2.5,
+  /** Stretch factor (length / original) just before being eaten, for the largest edible prey. */
+  approachStretch: 1.5,
+  /** Peak stretch factor during the infall, for the largest edible prey. */
+  maxStretch: 6,
+  /** Across-axis scale = stretch ^ -squeeze. 0.5 preserves volume; lower keeps the stream fatter. */
+  squeeze: 0.5,
+  /** Size weight = (preyRadius / (playerRadius * edibleRatio)) ^ sizePower scales stretch, curl and infall time. */
+  sizePower: 1,
+  /** Infall duration in seconds for the smallest and the largest edible prey. */
+  infallTimeMin: 0.35,
+  infallTimeMax: 0.85,
+  /** Distance to the hole shrinks as 1 - t^accelPower over the infall (t = 0..1): slow start, then a plunge. */
+  accelPower: 2,
+  /** Angle (radians) the falling object swings around the hole, in the disk's spin direction. */
+  swirl: 0.7,
+  /** The stream winds into a spiral: the end nearer the hole leads by curl radians per e-fold of distance. */
+  curl: 0.6,
+  /** Infall progress (0..1) at which the object starts draining into the core; fully gone at 1. */
+  drainStart: 0.55,
+  /** Radial distances below knee * core radius are squashed toward the centre so nothing pokes out the far side. */
+  knee: 0.5,
+  /** Tidal heating: HDR emissive glow near the hole while falling in. Parts within glowReach core radii glow. */
+  glowColor: 0xff7a30,
+  glowIntensity: 2.5,
+  glowReach: 3,
 } as const;
 
 export const LIGHTING = {

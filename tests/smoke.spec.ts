@@ -10,8 +10,17 @@ interface Debug {
     disk: { heat: number };
   };
   prey: {
-    objects: { position: { x: number; z: number }; radius: number; state: string }[];
+    objects: {
+      position: { x: number; z: number; set(x: number, y: number, z: number): void };
+      velocity: { set(x: number, y: number, z: number): void };
+      radius: number;
+      state: string;
+    }[];
     isEdible(obj: unknown): boolean;
+    mesh: {
+      instanceMatrix: { array: Float32Array };
+      geometry: { attributes: { aStretch: { array: Float32Array } } };
+    };
   };
   renderer: {
     lensing: { centre: { x: number; y: number }; coreRadius: number; setQuality(level: number): void };
@@ -159,6 +168,102 @@ test('lensing bends the disk around the hole and the core stays black', async ({
   const resized = await probe(2);
   expect(resized.core).toBeLessThan(3);
   expect(resized.near).toBeGreaterThan(50);
+
+  expect(errors).toEqual([]);
+});
+
+test('edible prey spaghettify: they stretch toward the hole and drain into the core when eaten', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto('/');
+  await page.mouse.move(640, 360);
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+
+  const result = await page.evaluate(async () => {
+    const d = window.__spaghettify;
+    const { player, prey } = d;
+    const nextFrame = async () => {
+      const f = d.frames;
+      while (d.frames === f) await new Promise(requestAnimationFrame);
+    };
+    // What the GPU gets for instance i: direction from the hole, stretch, centre and scale.
+    const read = (i: number) => {
+      const s = prey.mesh.geometry.attributes.aStretch.array;
+      const m = prey.mesh.instanceMatrix.array;
+      const dx = m[i * 16 + 12] - player.position.x;
+      const dz = m[i * 16 + 14] - player.position.z;
+      const dist = Math.hypot(dx, dz);
+      return {
+        dirLen: Math.hypot(s[i * 4], s[i * 4 + 1]),
+        // Cosine between the stretch axis and the line from the hole to the object.
+        align: dist > 1e-3 ? (s[i * 4] * dx + s[i * 4 + 1] * dz) / dist : 1,
+        stretch: s[i * 4 + 2],
+        dist,
+        scale: Math.hypot(m[i * 16], m[i * 16 + 1], m[i * 16 + 2]),
+      };
+    };
+
+    // Clear the field around the hole, then take the biggest edible object.
+    for (const o of prey.objects) o.position.x += 1000;
+    let index = -1;
+    prey.objects.forEach((o, i) => {
+      if (o.state === 'alive' && prey.isEdible(o) && (index < 0 || o.radius > prey.objects[index].radius)) index = i;
+    });
+    if (index < 0) throw new Error('no edible prey in the pool');
+    const obj = prey.objects[index];
+    const pr = player.radius;
+    obj.velocity.set(0, 0, 0);
+
+    // Far away: no tidal stretch.
+    obj.position.set(player.position.x + pr * 12, 0, player.position.z);
+    await nextFrame();
+    await nextFrame();
+    const far = read(index).stretch;
+
+    // Close but not touching: already stretching along the line to the hole.
+    obj.position.set(player.position.x, 0, player.position.z - (pr + obj.radius + pr * 0.2));
+    await nextFrame();
+    await nextFrame();
+    const near = read(index);
+
+    // Touching: eaten. Follow the infall frame by frame.
+    obj.position.set(player.position.x + pr + obj.radius * 0.1, 0, player.position.z);
+    const startDist = pr + obj.radius * 0.1;
+    let maxStretch = 0;
+    let minAlign = 1;
+    let last = null as ReturnType<typeof read> | null;
+    let frames = 0;
+    while (frames < 600) {
+      await nextFrame();
+      if (obj.state !== 'eating') {
+        if (last) break;
+        continue;
+      }
+      const r = read(index);
+      maxStretch = Math.max(maxStretch, r.stretch);
+      if (r.dist > 0.05 * pr) minAlign = Math.min(minAlign, r.align);
+      last = r;
+      frames++;
+    }
+    return { far, near, maxStretch, minAlign, last, startDist, radius: obj.radius, eatingFrames: frames };
+  });
+
+  expect(result.far).toBeCloseTo(1, 5);
+  expect(result.near.stretch).toBeGreaterThan(1.05);
+  expect(result.near.dirLen).toBeCloseTo(1, 3);
+  expect(result.near.align).toBeGreaterThan(0.999);
+  // Eaten: stretched into a long thin stream, always along the line to the hole...
+  expect(result.eatingFrames).toBeGreaterThan(2);
+  expect(result.maxStretch).toBeGreaterThan(Math.max(1.5, result.near.stretch));
+  expect(result.minAlign).toBeGreaterThan(0.999);
+  // ...and by its last frame it has fallen into the core and drained away.
+  expect(result.last).not.toBeNull();
+  expect(result.last!.dist).toBeLessThan(result.startDist * 0.5);
+  expect(result.last!.scale).toBeLessThan(result.radius * 0.5);
 
   expect(errors).toEqual([]);
 });
