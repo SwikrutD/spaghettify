@@ -23,6 +23,8 @@ export class GameCamera {
   private tierScale: number;
   private tierScaleTarget: number;
   private radius: number;
+  /** Extra distance from the horizontal FOV floor on narrow (portrait) screens, 1 otherwise. See `resize`. */
+  private aspectScale = 1;
 
   constructor(target: THREE.Vector3, radius: number, tierScale: number) {
     const tilt = THREE.MathUtils.degToRad(CAMERA.tiltDegrees);
@@ -49,12 +51,12 @@ export class GameCamera {
 
   /** The distance the camera is heading for (no tier-up punch). Spawning and despawning are sized from this. */
   get targetDistance(): number {
-    return radiusDistance(this.radius) * this.tierScaleTarget;
+    return radiusDistance(this.radius) * this.tierScaleTarget * this.aspectScale;
   }
 
   /** The current camera distance as a multiple of the starting distance, without the punch. Player speed follows it. */
   get viewScale(): number {
-    return (this.radiusDistance * this.tierScale) / CAMERA.startDistance;
+    return (this.radiusDistance * this.tierScale * this.aspectScale) / CAMERA.startDistance;
   }
 
   addShake(amount: number): void {
@@ -81,13 +83,24 @@ export class GameCamera {
     this.place();
   }
 
+  /**
+   * Horizontal FOV floor: a portrait screen widens the vertical FOV until it sees `CAMERA.minHorizontalFov`
+   * across, up to `CAMERA.maxFov`; the rest of the shortfall pulls the camera back. Spawn rings and speed are
+   * in camera distances, so they follow the pull-back. Landscape screens keep `CAMERA.fov`.
+   */
   resize(width: number, height: number): void {
-    this.camera.aspect = width / height;
-    this.camera.updateProjectionMatrix();
+    const aspect = width / Math.max(height, 1);
+    const tanHalf = (deg: number) => Math.tan(THREE.MathUtils.degToRad(deg) / 2);
+    const neededTan = tanHalf(CAMERA.minHorizontalFov) / aspect;
+    const tanV = Math.min(Math.max(neededTan, tanHalf(CAMERA.fov)), tanHalf(CAMERA.maxFov));
+    this.camera.aspect = aspect;
+    this.camera.fov = THREE.MathUtils.radToDeg(2 * Math.atan(tanV));
+    this.aspectScale = Math.max(1, neededTan / tanV);
+    this.place();
   }
 
   private place(): void {
-    const distance = this.radiusDistance * this.tierScale * (1 + TIER_UP.punchZoom * this.punch - this.kick);
+    const distance = this.radiusDistance * this.tierScale * this.aspectScale * (1 + TIER_UP.punchZoom * this.punch - this.kick);
     this.camera.position.copy(this.focus).addScaledVector(this.offsetDir, distance);
     if (this.shake > 1e-4) {
       const a = this.shake * distance;

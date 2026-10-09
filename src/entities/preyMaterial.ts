@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SPAGHETTI } from '../config';
+import { PREY, SPAGHETTI } from '../config';
 import stretchParsVert from '../shaders/preySpaghettify.pars.vert.glsl';
 import stretchVert from '../shaders/preySpaghettify.vert.glsl';
 import glowParsFrag from '../shaders/preyGlow.pars.frag.glsl';
@@ -11,13 +11,18 @@ export interface PreyUniforms {
 }
 
 /**
- * Lit, flat-shaded rock material with tidal stretching (spaghettification) in the vertex shader.
+ * Lit prey material with tidal stretching (spaghettification) in the vertex shader. `smooth` is for the round
+ * bodies (smooth shading, normals bent with the stretch); otherwise flat-shaded rock.
  * Stays opaque: prey must write alpha 1, the lensing pass uses scene alpha as its play-plane mask.
  * Reads the per-instance attributes `aStretch` (vec4) and `aGlow` (float), see preySpaghettify.pars.vert.glsl.
  */
-export function createPreyMaterial(): { material: THREE.MeshStandardMaterial; uniforms: PreyUniforms } {
+export function createPreyMaterial(smooth = false): { material: THREE.MeshStandardMaterial; uniforms: PreyUniforms } {
   const uniforms = { uHole: { value: new THREE.Vector3(0, 0, 1) } };
-  const material = new THREE.MeshStandardMaterial({ roughness: 0.95, metalness: 0, flatShading: true });
+  const material = new THREE.MeshStandardMaterial({
+    roughness: smooth ? PREY.sphereRoughness : 0.95,
+    metalness: 0,
+    flatShading: !smooth,
+  });
   material.onBeforeCompile = (shader) => {
     Object.assign(shader.uniforms, uniforms, {
       uSqueeze: { value: SPAGHETTI.squeeze },
@@ -34,7 +39,7 @@ export function createPreyMaterial(): { material: THREE.MeshStandardMaterial; un
       `#include <emissivemap_fragment>\n${glowFrag}`,
     );
   };
-  material.customProgramCacheKey = () => 'prey-spaghettify';
+  material.customProgramCacheKey = () => (smooth ? 'prey-spaghettify-smooth' : 'prey-spaghettify');
   return { material, uniforms };
 }
 

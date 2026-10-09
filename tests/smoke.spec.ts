@@ -1,5 +1,12 @@
 import { test, expect, type Page } from '@playwright/test';
 
+interface InstancedMeshProbe {
+  count: number;
+  instanceMatrix: { array: Float32Array };
+  material: { flatShading: boolean };
+  geometry: { index: unknown; attributes: { aStretch: { array: Float32Array } } };
+}
+
 interface Debug {
   frames: number;
   mode: string;
@@ -24,7 +31,13 @@ interface Debug {
   hungerOverlay: { level: number };
   tiers: { index: number; tier: { title: string; count: number; cameraScale: number }; timeScale: number };
   allTiers: { title: string; minMass: number; count: number; cameraScale: number; classes: { radius: [number, number] }[] }[];
-  camera: { targetDistance: number; viewScale: number; shake: number; kick: number };
+  camera: {
+    targetDistance: number;
+    viewScale: number;
+    shake: number;
+    kick: number;
+    camera: { fov: number; aspect: number };
+  };
   touch: { touching: boolean; mode: string };
   input: { move: { x: number; y: number } };
   prey: {
@@ -34,13 +47,12 @@ interface Debug {
       radius: number;
       mass: number;
       className: string;
+      round: boolean;
       state: string;
     }[];
     isEdible(obj: unknown): boolean;
-    mesh: {
-      instanceMatrix: { array: Float32Array };
-      geometry: { attributes: { aStretch: { array: Float32Array } } };
-    };
+    meshOf(i: number): InstancedMeshProbe;
+    group: { children: InstancedMeshProbe[] };
   };
   audio: {
     context: unknown;
@@ -271,8 +283,9 @@ test('edible prey spaghettify: they stretch toward the hole and drain into the c
     };
     // What the GPU gets for instance i: direction from the hole, stretch, centre and scale.
     const read = (i: number) => {
-      const s = prey.mesh.geometry.attributes.aStretch.array;
-      const m = prey.mesh.instanceMatrix.array;
+      const mesh = prey.meshOf(i);
+      const s = mesh.geometry.attributes.aStretch.array;
+      const m = mesh.instanceMatrix.array;
       const dx = m[i * 16 + 12] - player.position.x;
       const dz = m[i * 16 + 14] - player.position.z;
       const dist = Math.hypot(dx, dz);
@@ -434,12 +447,81 @@ test('crossing a mass threshold changes tier: prey table, entity budget and came
     const lo = Math.min(...classes.map((c) => c.radius[0]));
     const hi = Math.max(...classes.map((c) => c.radius[1]));
     const live = prey.objects.slice(0, tiers.tier.count);
-    return { index: tiers.index, count: live.length, outside: live.filter((o) => o.state === 'alive' && (o.radius < lo || o.radius > hi)).length };
+    // Planets and moons are drawn as smooth spheres, the rest as flat-shaded rocks; each slot shows in one mesh only.
+    const scale = (m: InstancedMeshProbe, i: number) => Math.hypot(...m.instanceMatrix.array.slice(i * 16, i * 16 + 3));
+    const misdrawn = live.filter((o, i) => {
+      const own = prey.meshOf(i);
+      const other = prey.group.children.find((m) => m !== own)!;
+      return own.material.flatShading === o.round || scale(own, i) === 0 || scale(other, i) !== 0;
+    }).length;
+    const sphereMesh = prey.group.children.find((m) => !m.material.flatShading)!;
+    return {
+      index: tiers.index,
+      count: live.length,
+      outside: live.filter((o) => o.state === 'alive' && (o.radius < lo || o.radius > hi)).length,
+      round: live.filter((o) => o.round).length,
+      misdrawn,
+      meshes: prey.group.children.length,
+      sphereIndexed: sphereMesh.geometry.index !== null,
+      roundNames: [...new Set(live.filter((o) => o.round).map((o) => o.className))],
+    };
   });
   expect(final.index).toBe(2);
   expect(final.outside).toBe(0);
+  expect(final.meshes).toBe(2);
+  expect(final.round).toBeGreaterThan(0);
+  expect(final.round).toBeLessThan(final.count);
+  expect(final.misdrawn).toBe(0);
+  expect(final.sphereIndexed).toBe(true);
+  for (const name of final.roundNames) expect(['dwarf planet', 'moon', 'rocky planet', 'ice giant', 'gas giant']).toContain(name);
 
   expect(errors).toEqual([]);
+});
+
+test('portrait screens get a horizontal FOV floor: wider view, the hole and fed disk fit the width', async ({ page }) => {
+  // A portrait phone (390x844) and the same screen turned to landscape.
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
+  await page.evaluate(() => (window.__spaghettify.hunger.enabled = false));
+
+  const probe = () =>
+    page.evaluate(async () => {
+      const d = window.__spaghettify;
+      for (let i = 0; i < 3; i++) {
+        const f = d.frames;
+        while (d.frames === f) await new Promise(requestAnimationFrame);
+      }
+      const { fov, aspect } = d.camera.camera;
+      const hfov = (2 * Math.atan(Math.tan((fov * Math.PI) / 360) * aspect) * 180) / Math.PI;
+      // Core radius as a fraction of the screen width (the lens reports it as a fraction of the height).
+      const coreOfWidth = d.renderer.lensing.coreRadius / aspect;
+      return { fov, hfov, distance: d.camera.targetDistance, viewScale: d.camera.viewScale, coreOfWidth };
+    });
+
+  const portrait = await probe();
+  await page.setViewportSize({ width: 844, height: 390 });
+  const landscape = await probe();
+  await page.setViewportSize({ width: 390, height: 844 });
+  const back = await probe();
+
+  // Landscape keeps the base FOV and distance.
+  expect(landscape.fov).toBeCloseTo(45, 3);
+  // Portrait: the vertical FOV widens (capped) and the camera pulls back for the rest, so the view covers
+  // what a 60 degree view would instead of a 22 degree slit.
+  expect(portrait.fov).toBeGreaterThan(45);
+  expect(portrait.fov).toBeLessThanOrEqual(55.01);
+  expect(portrait.distance).toBeGreaterThan(landscape.distance * 1.5);
+  // Ground width seen at the hole, relative to the landscape camera distance: as wide as a 60 degree view.
+  const across = Math.tan((portrait.hfov * Math.PI) / 360) * (portrait.distance / landscape.distance);
+  expect(across).toBeGreaterThan(Math.tan(Math.PI / 6) * 0.99);
+  expect(portrait.viewScale).toBeGreaterThan(landscape.viewScale * 1.5);
+  // A fully fed disk (outer edge 3.6 core radii, DISK.outerRadiusMax) spans well under the screen width.
+  expect(2 * 3.6 * portrait.coreOfWidth).toBeLessThan(0.6);
+  // Turning back gives the same view.
+  expect(back.fov).toBeCloseTo(portrait.fov, 3);
+  expect(back.distance).toBeCloseTo(portrait.distance, 3);
 });
 
 test('speed holds on screen as the hole grows', async ({ page }) => {

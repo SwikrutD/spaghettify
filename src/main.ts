@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CAMERA, DANGER, HUNGER, JUICE, LIGHTING, QUALITY, RENDER, TIERS } from './config';
+import { DANGER, HUNGER, JUICE, LIGHTING, QUALITY, RENDER, TIERS } from './config';
 import { initAnalytics, scoreBand, track } from './analytics/analytics';
 import { AudioEngine } from './audio/AudioEngine';
 import { Dangers } from './dangers/Dangers';
@@ -44,7 +44,7 @@ const shedBurst = new ShedBurst();
 const starfield = createStarfield();
 const keyLight = new THREE.DirectionalLight(LIGHTING.keyColor, LIGHTING.key);
 keyLight.position.set(...LIGHTING.keyPosition);
-scene.add(starfield.points, player.group, prey.mesh, comets.group, shedBurst.points, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
+scene.add(starfield.points, player.group, prey.group, comets.group, shedBurst.points, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
 
 const audio = new AudioEngine();
 const settings = new Settings();
@@ -184,7 +184,7 @@ function applyQuality(index = qualityLevel()): void {
   renderer.setQuality(level);
   player.disk.setDetail(level.diskLayers, level.diskOctaves);
   player.disk.setRenderHeight(renderer.bufferHeight);
-  shedBurst.setViewport(renderer.bufferHeight, CAMERA.fov);
+  shedBurst.setViewport(renderer.bufferHeight, gameCamera.camera.fov);
 }
 autoQuality.onChange = () => applyQuality();
 
@@ -277,8 +277,8 @@ function resize(): void {
   const h = window.innerHeight;
   renderer.resize(w, h);
   player.disk.setRenderHeight(renderer.bufferHeight);
-  shedBurst.setViewport(renderer.bufferHeight, CAMERA.fov);
   gameCamera.resize(w, h);
+  shedBurst.setViewport(renderer.bufferHeight, gameCamera.camera.fov);
 }
 window.addEventListener('resize', resize);
 resize();

@@ -1,17 +1,19 @@
 # Progress - Spaghettify
 
 ## Next session
-Before it, the user deploys (`deploy/DEPLOY.md`), fills in the Umami website id and playtests on a desktop and a phone, now with dangers: is the pull noticeable but fair, do hits read (blink, sparks, thud), are comets fair at the start? Feed the notes into the prompt.
+M13 part 1 (round bodies, portrait FOV floor) is done. The tuning part was not done: the start prompt still had the `<paste notes>` placeholder, so there were no playtest notes to tune from.
 
-Then M13 Playtest polish [Sonnet 5.5, high]: round smooth planets and moons instead of potato rocks, a horizontal FOV floor for portrait phones, and danger, hunger and tier tuning from the playtest notes.
-How to start: `/clear`, then `/model` (Sonnet 5.5, high), then paste:
+Before it, the user deploys (`deploy/DEPLOY.md`), fills in the Umami website id and playtests on a desktop and a phone: pull, hits (blink, sparks, thud), comet fairness at the start, hunger pacing, tier lengths, and now also how the round planets read and how the portrait view feels. Write the notes down and paste them into the prompt below.
+
+Then M13 part 2 Playtest tuning [Sonnet 5.5, medium]: pure number changes in `src/config` driven by notes, plus test fixes; medium is enough since no new systems are expected.
+How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste:
 
 ```
-Start Milestone 13 (playtest polish) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 13 part 2 (playtest tuning) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: (1) Big bodies read as round planets and moons, not lumpy rocks: a second smooth sphere mesh (or a per-instance roundness) for the planet and moon classes, keeping one draw call per mesh, the spaghettification stretch (preySpaghettify glsl) and the alpha 1 lens mask. Comets share PreyMesh, so keep their nuclei lumpy. (2) Portrait phones: a horizontal FOV floor in GameCamera.resize so the view is not a narrow slit and the fed disk does not span the screen. (3) Tune DANGER, COMETS, HUNGER and TIERS from these playtest notes: <paste notes>. All tunables stay in src/config.
+Goal: tune DANGER, COMETS, HUNGER, TIERS (thresholds, counts, class weights, per-tier comet tables) and, if the notes ask, the round-body look (PREY.sphereRoughness, LIGHTING) and the portrait view (CAMERA.minHorizontalFov, CAMERA.maxFov) from these playtest notes: <PASTE THE ACTUAL NOTES HERE>. All tunables stay in src/config. If the leaderboard score caps depend on a changed table, check LEADERBOARD still accepts a fast real run.
 
-Done when: the existing Playwright tests still pass (update any that assume rock meshes), a new test covers the portrait FOV floor, npm run typecheck, npm run lint and npm test pass, Progress.md is updated and the work is committed.
+Done when: every change traces to a note (list them in Progress.md), npm run typecheck, npm run lint and npm test pass (fix tests that assumed old numbers, do not weaken what they check), Progress.md is updated and the work is committed.
 ```
 
 ## Milestones
@@ -30,7 +32,7 @@ Suggested model/effort in brackets.
 - [x] M10 Share card [Sonnet 5.5, medium] (2026-10-09, awaiting a real phone share)
 - [x] M11 Global leaderboard (Fastify + SQLite backend in the same compose) [Sonnet 5.5, high] (2026-10-09, works locally in compose; not deployed)
 - [x] M12 Dangers: gravity pull, collisions, comets [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
-- [ ] M13 Playtest polish: round planets, portrait FOV floor, tuning [Sonnet 5.5, high]
+- [~] M13 Playtest polish [Sonnet 5.5, high]: part 1 round planets and portrait FOV floor (2026-10-09, awaiting user playtest); part 2 tuning from playtest notes [Sonnet 5.5, medium] not started
 - [ ] Later: more tiers, daily seed, multiplayer
 
 ## Done
@@ -183,6 +185,13 @@ Suggested model/effort in brackets.
   - Tests (28 pass, plus 9 server tests): pull with no input drifts the hole toward a body and holding away escapes; a collision knocks back, sheds mass but not score, sparks, shakes and plays the hit sound once; an invulnerable second contact pushes out with no loss; a later hit never goes below the floor margin; overlapping bodies separate; a table comet spawns on the ring heading in at the table speed; a launched comet crosses on a straight line and is recycled; one aimed at the hole hits it; a small one is eaten.
   - Judged by real-GPU stills: comet tail and coma, the shed spray. Not judged in motion by a human.
 
+- 2026-10-09 M13 part 1: round bodies and portrait view (awaiting user playtest).
+  - Round bodies: tier classes take `round: true` (dwarf planet, moon, rocky planet, ice giant, gas giant). Small moons and asteroids stay lumpy, as real ones are irregular. `PreyObject.round` is set at respawn.
+  - `PreyMesh` takes a shape (`'rock'` default, or `'sphere'`). The sphere is a smooth indexed icosphere (`PREY.sphereDetail` 8, about 800 shared vertices, so it is cheaper per instance than the rock) with `PREY.sphereRoughness` 0.8. `PreyField` owns one of each over the same slot indices: each slot is written to the mesh of its shape and hidden (zero matrix) in the other, so it is two draw calls in all, both on layer 0 with alpha 1. `prey.group` holds both (added to the scene); `prey.meshOf(i)` replaces `prey.mesh`. Comets keep their own rock-only PreyMesh.
+  - Smooth shading under the stretch: `preyMaterial(smooth)` turns flat shading off and `spaghettifyNormal()` (in `preySpaghettify.pars.vert.glsl`) bends the vertex normal by the inverse transpose of the stretch and squeeze plus the same curl rotation (the knee squash is ignored; it only acts inside the core). Rocks still use derivative normals. Real-GPU stills: planets read as round with a soft terminator; an eaten moon becomes a smooth, glowing, curved stream.
+  - Portrait FOV floor (`GameCamera.resize`, `CAMERA.minHorizontalFov` 60, `CAMERA.maxFov` 55): a narrow screen widens the vertical FOV to see 60 degrees across, up to 55 degrees vertical; the rest of the shortfall pulls the camera back (`aspectScale`, part of `targetDistance` and `viewScale`). So spawn rings, despawn, comet speeds, top speed and the starfield all follow it. Landscape is unchanged (45). On 390x844 the camera pulls back about 2.4x and a fed disk spans well under the width. `shedBurst.setViewport` now gets the live camera FOV.
+  - Tests (29 pass, plus 9 server tests): the spaghetti test reads `prey.meshOf(i)`; the tier test checks at tier 2 that round classes draw only in the smooth indexed mesh and the rest only in the rock mesh; new portrait test (FOV widened and capped, ground width at least a 60 degree view, pull-back, fed disk under 0.6 of the width, landscape keeps 45, rotating back is stable).
+
 ## In progress
 (nothing)
 
@@ -239,6 +248,9 @@ Suggested model/effort in brackets.
 - 2026-10-09: Danger strength is relative to the hole's steering authority, so the same numbers feel the same from a pea to a planet, and the total pull is capped below it, so the hole can always escape. Hits clamp above the hunger floor: collisions punish by bringing starvation closer, never by ending the run outright.
 - 2026-10-09: Comets ignore other bodies (they pass over them) and only the hole collides with them. Keeps them on a readable straight line.
 
+- 2026-10-09: Round bodies are a second InstancedMesh over the same slots (not a per-instance roundness in one mesh): the rock keeps its low-poly flat look at detail 2 while spheres need a fine smooth mesh, and one material cannot be both flat and smooth shaded. Hidden slots cost only vertex work.
+- 2026-10-09: The portrait FOV floor widens the FOV only up to 55 degrees and makes up the rest by pulling the camera back. Widening alone would need about 90 degrees on a tall phone, which looks fish-eye under a 58 degree tilt and shows the spawn ring at the top of the screen. The pull-back goes through `targetDistance` and `viewScale`, so everything sized in camera distances follows it for free.
+
 ## Known bugs
 - Leaderboard: anyone can post under someone else's nickname; the best run wins either way. No admin UI (DEPLOY.md has a one-line delete). The nickname filter is English-centric and small. Quitting a run from the pause menu does not post it.
 - Leaderboard: the caps were checked against test runs only, not real long runs. If a real run is rejected as implausible, `docker logs spaghettify-api` shows it; loosen `LEADERBOARD.maxMealsPerSecond`.
@@ -256,7 +268,8 @@ Suggested model/effort in brackets.
 - Lens: near a prey close to the hole, stars bent with the plane strength sit next to stars bent with the full strength, so star positions jump slightly there. Not noticeable in screenshots.
 - Lens: a star exactly behind the hole makes an Einstein ring with faint beads (magnified texels of a small star sprite). Rare and brief.
 - Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. The M4 infall now starts from there, so it reads as being pulled in; judge in playtest.
-- Prey: planets and moons are the same flat-shaded lumpy low-poly rock mesh as asteroids, only coloured per class. Big bodies look like potatoes; needs round smooth bodies (a second mesh type or a per-instance roundness) at the M7 visual pass.
+- Prey: round bodies are plain coloured spheres (no bands on gas giants, no craters). Lit by the same key light as rocks, so they look fairly evenly lit; judge in playtest (`LIGHTING`, `PREY.sphereRoughness`). Seen at the screen edge they look slightly oval (perspective).
+- Prey: hidden slots still run the vertex shader in the other mesh (zero matrix). About 65k sphere plus 43k rock vertices per frame at most; fine on the desktop GPU, not measured on a phone.
 - Dangers: tuned from numbers and stills only (pull 0.45, shed 12 percent, invulnerable 1.2 s, comet timing). Comets pass through other bodies. There is no off-screen warning for an incoming comet; the first one comes 12 s into a run.
 - Dangers: the hole's own growth next to a body can make it touch and take a hit. Edible prey are also pushed around by the body separation.
 - Comets: the tail trails behind the motion (reads well) instead of pointing away from a sun, since the scene has none. The tail is not lensed; near the hole the bent nucleus and the unbent tail can sit slightly apart.
@@ -265,7 +278,7 @@ Suggested model/effort in brackets.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
 - Perf: not tested on a real phone. Open the game with `?perf` on a phone and note the fps and the quality level it settles on after half a minute. Phones rarely expose the GPU timer, so the readout shows frame time only.
 - Perf: half-size bloom (levels 3 to 5) loses most of the soft glow around the photon ring and the inner disk edge; judge by eye. Bloom is now the biggest single pass at High on a portrait phone screen (0.2 of 0.54 ms here).
-- Camera: on a portrait phone the vertical FOV is fixed, so the view is very narrow and the fed disk spans nearly the whole screen width. Gameplay issue for the phone playtest (consider a horizontal FOV floor in `GameCamera.resize`).
+- Camera: portrait phones see much more world vertically than horizontally (the floor pulls the camera back about 2.4x on 390x844), and top speed in world units follows that pull-back. The entity budget is per tier, so density per screen holds. Judge on a phone; `CAMERA.minHorizontalFov` and `maxFov` are the knobs. Rotating the phone changes the distance at once (no easing).
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 - Deploy: not yet live. Umami `websiteId` is empty (analytics off) until the user fills it in; the subdomain is assumed to be `spaghettify.swikrut.com`. Not verified behind Cloudflare. Meta description and og tags added in M10; no og:image.
 

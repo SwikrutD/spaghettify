@@ -13,14 +13,18 @@ export interface ViewSource {
 }
 
 /**
- * Prey: a fixed pool of rocks drawn as one InstancedMesh (see PreyMesh). What spawns comes from the current
+ * Prey: a fixed pool of bodies drawn as two InstancedMeshes over the same slots (see PreyMesh), lumpy rocks
+ * and smooth round bodies (planets, moons); each slot is drawn in the mesh of its shape and hidden in the other. What spawns comes from the current
  * tier's absolute prey table and entity budget (the first `tier.count` slots are live); spawn distances
  * scale with the view. Edible prey spaghettify when eaten. Bodies never overlap each other: overlapping
  * pairs are pushed apart, and spawns avoid other bodies and keep big ones out of pull reach of the hole.
  */
 export class PreyField {
   readonly objects: PreyObject[] = [];
-  private readonly instances = new PreyMesh(PREY_POOL_SIZE);
+  /** Both meshes; add this to the scene. */
+  readonly group = new THREE.Group();
+  private readonly rocks = new PreyMesh(PREY_POOL_SIZE, 'rock');
+  private readonly spheres = new PreyMesh(PREY_POOL_SIZE, 'sphere');
   private tier: Tier;
 
   constructor(
@@ -29,17 +33,20 @@ export class PreyField {
     tier: Tier,
   ) {
     this.tier = tier;
-    this.mesh.count = tier.count;
+    this.group.add(this.rocks.mesh, this.spheres.mesh);
+    this.setCount(tier.count);
     for (let i = 0; i < PREY_POOL_SIZE; i++) {
       const obj = createPreyObject();
       this.objects.push(obj);
       this.respawn(i, PREY.initialInner, PREY.initialOuter, false);
-      this.instances.write(i, obj, player);
+      this.write(i);
     }
+    this.commit();
   }
 
-  get mesh(): THREE.InstancedMesh {
-    return this.instances.mesh;
+  /** The mesh slot i is drawn in (its instance index is i). */
+  meshOf(i: number): THREE.InstancedMesh {
+    return (this.objects[i].round ? this.spheres : this.rocks).mesh;
   }
 
   /** Live slots (the current tier's entity budget). */
@@ -56,29 +63,29 @@ export class PreyField {
   setTier(tier: Tier): void {
     const oldCount = this.tier.count;
     this.tier = tier;
-    this.mesh.count = tier.count;
+    this.setCount(tier.count);
     const minRadius = tierMinRadius(tier);
     for (let i = 0; i < tier.count; i++) {
       const obj = this.objects[i];
       if (i >= oldCount || (obj.state === 'alive' && obj.radius < minRadius)) {
         this.respawn(i, PREY.initialInner, PREY.initialOuter, true);
-        this.instances.write(i, obj, this.player);
+        this.write(i);
       }
     }
-    this.instances.commit();
+    this.commit();
   }
 
   /** Start of a new run: refill the whole pool across the view from the given tier's table. */
   reset(tier: Tier): void {
     this.tier = tier;
-    this.mesh.count = tier.count;
+    this.setCount(tier.count);
     // Park everything far away first so the refill does not dodge the last run's bodies.
     for (const obj of this.objects) obj.position.set(1e9, 0, 1e9);
     for (let i = 0; i < PREY_POOL_SIZE; i++) {
       this.respawn(i, PREY.initialInner, PREY.initialOuter, false);
-      this.instances.write(i, this.objects[i], this.player);
+      this.write(i);
     }
-    this.instances.commit();
+    this.commit();
   }
 
   update(dt: number): void {
@@ -89,7 +96,8 @@ export class PreyField {
     const respawnSq = (PREY.respawnInner * view) ** 2;
     // Specks the player has outgrown are recycled once they are off screen.
     const staleRadius = pr * PREY.minRelSize;
-    this.instances.setHole(player);
+    this.rocks.setHole(player);
+    this.spheres.setHole(player);
 
     for (let i = 0; i < this.tier.count; i++) {
       const obj = this.objects[i];
@@ -119,10 +127,25 @@ export class PreyField {
     }
 
     this.separate(dt);
-    for (let i = 0; i < this.tier.count; i++) {
-      this.instances.write(i, this.objects[i], player);
-    }
-    this.instances.commit();
+    for (let i = 0; i < this.tier.count; i++) this.write(i);
+    this.commit();
+  }
+
+  /** Draw slot i in the mesh of its shape and hide it in the other. */
+  private write(i: number): void {
+    const obj = this.objects[i];
+    (obj.round ? this.spheres : this.rocks).write(i, obj, this.player);
+    (obj.round ? this.rocks : this.spheres).hide(i);
+  }
+
+  private commit(): void {
+    this.rocks.commit();
+    this.spheres.commit();
+  }
+
+  private setCount(count: number): void {
+    this.rocks.mesh.count = count;
+    this.spheres.mesh.count = count;
   }
 
   /** Push overlapping live bodies apart, the lighter one moving more. O(n^2) over at most PREY_POOL_SIZE bodies, no allocations. */
@@ -163,6 +186,7 @@ export class PreyField {
 
     const cls = this.pickClass(pr * PREY.minRelSize, obj);
     obj.className = cls.name;
+    obj.round = cls.round ?? false;
     obj.mass = massOfRadius(obj.radius);
     obj.state = 'alive';
     obj.appear = animate ? 0 : 1;
@@ -195,7 +219,8 @@ export class PreyField {
       lerp(sat[0], sat[1], Math.random()),
       lerp(light[0], light[1], Math.random()),
     );
-    this.instances.setColor(i, tmpColor);
+    this.rocks.setColor(i, tmpColor);
+    this.spheres.setColor(i, tmpColor);
   }
 
   /** True if slot i overlaps another live body (other slots that exist yet). */

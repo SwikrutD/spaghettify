@@ -22,6 +22,11 @@ export interface PreyClass {
   /** Relative spawn weight within the tier. */
   weight: number;
   color: PreyColor;
+  /**
+   * Drawn as a smooth sphere instead of a lumpy rock. True for bodies massive enough to pull themselves round
+   * (dwarf planets and up); small moons and asteroids stay irregular, as real ones are.
+   */
+  round?: boolean;
 }
 
 export interface Tier {
@@ -83,8 +88,8 @@ export const TIERS: readonly Tier[] = [
       { name: 'boulder', radius: [1.2, 3], weight: 3, color: ROCK },
       { name: 'asteroid', radius: [3, 7], weight: 3.5, color: GREY },
       { name: 'small moon', radius: [6, 11], weight: 2, color: GREY },
-      { name: 'dwarf planet', radius: [11, 18], weight: 1.2, color: ICY },
-      { name: 'moon', radius: [18, 26], weight: 0.5, color: GREY },
+      { name: 'dwarf planet', radius: [11, 18], weight: 1.2, color: ICY, round: true },
+      { name: 'moon', radius: [18, 26], weight: 0.5, color: GREY, round: true },
     ],
     comets: { radius: [4, 9], speed: [0.5, 0.7], interval: [9, 15], firstDelay: 6 },
   },
@@ -96,11 +101,11 @@ export const TIERS: readonly Tier[] = [
     classes: [
       { name: 'asteroid', radius: [4, 9], weight: 1.5, color: GREY },
       { name: 'small moon', radius: [6, 12], weight: 2.5, color: GREY },
-      { name: 'dwarf planet', radius: [12, 20], weight: 2, color: ICY },
-      { name: 'moon', radius: [20, 32], weight: 2.5, color: GREY },
-      { name: 'rocky planet', radius: [36, 60], weight: 2.5, color: RUST },
-      { name: 'ice giant', radius: [80, 120], weight: 1, color: ICE_GIANT },
-      { name: 'gas giant', radius: [150, 220], weight: 0.7, color: GAS_GIANT },
+      { name: 'dwarf planet', radius: [12, 20], weight: 2, color: ICY, round: true },
+      { name: 'moon', radius: [20, 32], weight: 2.5, color: GREY, round: true },
+      { name: 'rocky planet', radius: [36, 60], weight: 2.5, color: RUST, round: true },
+      { name: 'ice giant', radius: [80, 120], weight: 1, color: ICE_GIANT, round: true },
+      { name: 'gas giant', radius: [150, 220], weight: 0.7, color: GAS_GIANT, round: true },
     ],
     comets: { radius: [6, 14], speed: [0.55, 0.75], interval: [8, 14], firstDelay: 6 },
   },

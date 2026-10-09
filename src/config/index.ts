@@ -96,6 +96,12 @@ export const PREY = {
   /** Rock surface roughness (fraction of radius) and mesh detail. */
   roughness: 0.18,
   meshDetail: 2,
+  /**
+   * Round bodies (classes with `round` in the tier tables): smooth-shaded icosphere detail (8 gives about
+   * 800 shared vertices, a smooth silhouette even on a planet filling half the screen) and surface roughness.
+   */
+  sphereDetail: 8,
+  sphereRoughness: 0.8,
 } as const;
 
 /**
@@ -279,7 +285,15 @@ export const CAMERA = {
    * it grows (0 would never zoom out, 1 keeps it the same size). Hole.io style: grow, zoom out slowly.
    */
   zoomExponent: 0.7,
+  /** Vertical field of view in degrees on landscape and square screens. */
   fov: 45,
+  /**
+   * Horizontal FOV floor in degrees, so a portrait phone is not a narrow slit (60 is about what a 4:3 screen
+   * sees). The vertical FOV widens to meet it up to `maxFov`; past that the camera pulls back instead, which
+   * keeps the perspective from going fish-eye at the top of a tilted view.
+   */
+  minHorizontalFov: 60,
+  maxFov: 55,
   /** Clip planes as a multiple of the camera distance, so depth precision holds at every scale. */
   nearPerDistance: 0.009,
   farPerDistance: 180,

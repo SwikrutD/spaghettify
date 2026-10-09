@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { DISK, PREY, SPAGHETTI } from '../config';
 import type { Player } from '../player/Player';
 import { createPreyMaterial, type PreyUniforms } from './preyMaterial';
@@ -13,6 +14,8 @@ export interface PreyObject {
   mass: number;
   /** Name of the tier-table class this object was drawn from, e.g. "asteroid". */
   className: string;
+  /** Drawn as a smooth sphere (planets, moons) instead of a lumpy rock. */
+  round: boolean;
   state: PreyState;
   /** 0..1 scale-in after (re)spawning. */
   appear: number;
@@ -43,6 +46,7 @@ export function createPreyObject(): PreyObject {
     radius: 1,
     mass: 1,
     className: '',
+    round: false,
     state: 'alive',
     appear: 1,
     eatProgress: 0,
@@ -97,8 +101,10 @@ const tmpOffset = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
 
+export type PreyShape = 'rock' | 'sphere';
+
 /**
- * Lumpy rocks drawn as one InstancedMesh with tidal stretching (spaghettification): edible objects stretch
+ * Lumpy rocks or smooth spheres drawn as one InstancedMesh with tidal stretching (spaghettification): edible objects stretch
  * toward the hole as it gets close, and eaten ones fall in, stretching into a thin spiralling stream that
  * drains into the core (see preySpaghettify.pars.vert.glsl). Used by the prey field and the comet nuclei.
  */
@@ -110,8 +116,8 @@ export class PreyMesh {
   private readonly glowAttr: THREE.InstancedBufferAttribute;
   private readonly uniforms: PreyUniforms;
 
-  constructor(capacity: number) {
-    const geometry = createRockGeometry();
+  constructor(capacity: number, shape: PreyShape = 'rock') {
+    const geometry = shape === 'sphere' ? createSphereGeometry() : createRockGeometry();
     this.stretchAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
     this.stretchAttr.setUsage(THREE.DynamicDrawUsage);
     this.glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
@@ -119,7 +125,7 @@ export class PreyMesh {
     geometry.setAttribute('aStretch', this.stretchAttr);
     geometry.setAttribute('aGlow', this.glowAttr);
 
-    const { material, uniforms } = createPreyMaterial();
+    const { material, uniforms } = createPreyMaterial(shape === 'sphere');
     this.uniforms = uniforms;
     this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
     this.mesh.frustumCulled = false;
@@ -231,5 +237,16 @@ function createRockGeometry(): THREE.BufferGeometry {
     pos.setXYZ(i, v.x, v.y, v.z);
   }
   geo.computeVertexNormals();
+  return geo;
+}
+
+/** Smooth unit icosphere, indexed so each vertex is shaded once per instance. Normals point straight out. */
+function createSphereGeometry(): THREE.BufferGeometry {
+  const ico = new THREE.IcosahedronGeometry(1, PREY.sphereDetail);
+  ico.deleteAttribute('normal');
+  ico.deleteAttribute('uv');
+  const geo = mergeVertices(ico);
+  ico.dispose();
+  geo.setAttribute('normal', geo.attributes.position.clone());
   return geo;
 }
