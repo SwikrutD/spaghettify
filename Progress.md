@@ -2,6 +2,7 @@
 
 ## Next session
 M5 Spawning and size tiers (debris, asteroids/moons, planets). Recommended: Sonnet 5.5, high (per milestone list). Replace the relative-size prey pool with absolute tier tables and mass thresholds that change scene scale and prey table, with a short tier-up set piece. Keep prey in the one spaghettifying InstancedMesh (or one per tier mesh type, each with the same `createPreyMaterial`). User should first playtest M1 to M4 and report tweaks to `GROWTH`, `PREY`, `SPAGHETTI`, `DISK`, `BLOOM`, `LENSING`.
+How to start: `/clear`, then `/model` (Sonnet 5.5, high), then paste the M5 start prompt from the M4 recap. Done when tiers work, tsc, ESLint and `npm test` pass (add a tier-up assertion), Progress.md updated and committed.
 
 ## Milestones
 Suggested model/effort in brackets.
