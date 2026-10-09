@@ -145,6 +145,32 @@ export const INPUT = {
   mouseFullSpeedRadius: 0.3,
   /** Pointer offset below this fraction gives no movement. */
   mouseDeadzone: 0.02,
+  /** Finger follow: same shape as the mouse, with a wider reach because a thumb travels less. */
+  touchFullSpeedRadius: 0.22,
+  touchDeadzone: 0.02,
+  /** Virtual joystick: drag distance (fraction of the shorter screen side) for full speed, and the deadzone. */
+  joystickRadius: 0.12,
+  joystickDeadzone: 0.1,
+  /** Gamepad left stick deadzone (radial). */
+  gamepadDeadzone: 0.18,
+} as const;
+
+/** Light juice: camera shake and a small zoom kick on meals. */
+export const JUICE = {
+  /** A meal shakes the camera only when its radius is at least this fraction of the hole radius. */
+  shakeMinRatio: 0.35,
+  /** Shake strength (fraction of camera distance) at a meal as big as the hole, scaled linearly and capped. */
+  shakePerRatio: 0.012,
+  shakeMax: 0.03,
+  /** Shake added by a tier-up, and how fast shake dies away (1/s). */
+  tierShake: 0.03,
+  shakeDecay: 7,
+  /** Shake oscillation speed (rad/s). */
+  shakeFrequency: 55,
+  /** Zoom kick on any meal: fraction of the distance pulled in, scaled by meal size ratio, and its decay (1/s). */
+  kickPerRatio: 0.02,
+  kickMax: 0.035,
+  kickDecay: 9,
 } as const;
 
 export const CAMERA = {
@@ -403,4 +429,6 @@ export const MENU = {
   /** Display names for the quality levels, indexed like LENSING.samples. */
   qualityNames: ['Low', 'Medium', 'High'],
   defaultScheme: 'mouse',
+  /** Scheme picked on a touch-first device when nothing is stored yet. */
+  defaultTouchScheme: 'finger',
 } as const;

@@ -25,7 +25,7 @@ export class SettingsPanel {
     title.textContent = 'SETTINGS';
     Object.assign(title.style, { fontSize: '28px', fontWeight: '700', letterSpacing: '0.3em', marginBottom: '16px', textAlign: 'center' });
 
-    for (const [value, label] of [['mouse', 'Mouse follow'], ['keyboard', 'Keyboard only']] as const) {
+    for (const [value, label] of [['mouse', 'Mouse follow'], ['keyboard', 'Keyboard only'], ['finger', 'Touch: finger follow'], ['joystick', 'Touch: joystick']] as const) {
       this.scheme.append(new Option(label, value));
     }
     MENU.qualityNames.forEach((name, i) => this.quality.append(new Option(name, String(i))));

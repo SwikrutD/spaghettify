@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { CAMERA, PLAYER, TIER_UP } from '../config';
+import { CAMERA, JUICE, PLAYER, TIER_UP } from '../config';
 
 /**
  * Tilted 2.5D follow camera. Distance grows with the player radius (Hole.io style: zoom out slower than
@@ -10,6 +10,11 @@ export class GameCamera {
   readonly camera = new THREE.PerspectiveCamera(CAMERA.fov, 1, 0.1, 1000);
   /** Extra pull-back, 0..1, driven by the tier-up set piece. */
   punch = 0;
+  /** Shake strength as a fraction of the distance; decays by itself. Add with `addShake`. */
+  shake = 0;
+  /** Small zoom-in kick on meals, decays by itself. */
+  kick = 0;
+  private shakeTime = 0;
   private readonly focus = new THREE.Vector3();
   private readonly offsetDir: THREE.Vector3;
   /** Smoothed distance from the radius alone. */
@@ -33,6 +38,8 @@ export class GameCamera {
   /** Snap back to a fresh run (no easing). */
   reset(target: THREE.Vector3, radius: number, tierScale: number): void {
     this.punch = 0;
+    this.shake = 0;
+    this.kick = 0;
     this.radius = radius;
     this.radiusDistance = radiusDistance(radius);
     this.tierScale = this.tierScaleTarget = tierScale;
@@ -50,6 +57,14 @@ export class GameCamera {
     return (this.radiusDistance * this.tierScale) / CAMERA.startDistance;
   }
 
+  addShake(amount: number): void {
+    this.shake = Math.min(JUICE.tierShake * 1.5, this.shake + amount);
+  }
+
+  addKick(amount: number): void {
+    this.kick = Math.min(JUICE.kickMax, Math.max(this.kick, amount));
+  }
+
   setTierScale(scale: number): void {
     this.tierScaleTarget = scale;
   }
@@ -60,6 +75,9 @@ export class GameCamera {
     this.radius = radius;
     this.radiusDistance += (radiusDistance(radius) - this.radiusDistance) * k;
     this.tierScale += (this.tierScaleTarget - this.tierScale) * (1 - Math.exp(-TIER_UP.pullRate * dt));
+    this.shakeTime += dt;
+    this.shake *= Math.exp(-JUICE.shakeDecay * dt);
+    this.kick *= Math.exp(-JUICE.kickDecay * dt);
     this.place();
   }
 
@@ -69,8 +87,14 @@ export class GameCamera {
   }
 
   private place(): void {
-    const distance = this.radiusDistance * this.tierScale * (1 + TIER_UP.punchZoom * this.punch);
+    const distance = this.radiusDistance * this.tierScale * (1 + TIER_UP.punchZoom * this.punch - this.kick);
     this.camera.position.copy(this.focus).addScaledVector(this.offsetDir, distance);
+    if (this.shake > 1e-4) {
+      const a = this.shake * distance;
+      const t = this.shakeTime * JUICE.shakeFrequency;
+      this.camera.position.x += Math.sin(t * 1.3) * a;
+      this.camera.position.y += Math.sin(t * 1.7 + 1.1) * a * 0.6;
+    }
     this.camera.lookAt(this.focus);
     // Clip planes follow the distance so depth precision holds from a pea to a planet system.
     this.camera.near = distance * CAMERA.nearPerDistance;

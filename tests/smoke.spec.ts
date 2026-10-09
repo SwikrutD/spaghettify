@@ -10,6 +10,7 @@ interface Debug {
     mass: number;
     eatenCount: number;
     eatenMass: number;
+    eat(mass: number, what?: { name: string; radius: number }): void;
     biggestEaten: { name: string; radius: number } | null;
     disk: { heat: number; starvation: number };
     velocity: { x: number; z: number };
@@ -19,7 +20,9 @@ interface Debug {
   hungerOverlay: { level: number };
   tiers: { index: number; tier: { title: string; count: number; cameraScale: number }; timeScale: number };
   allTiers: { title: string; minMass: number; count: number; cameraScale: number; classes: { radius: [number, number] }[] }[];
-  camera: { targetDistance: number; viewScale: number };
+  camera: { targetDistance: number; viewScale: number; shake: number; kick: number };
+  touch: { touching: boolean; mode: string };
+  input: { move: { x: number; y: number } };
   prey: {
     objects: {
       position: { x: number; z: number; set(x: number, y: number, z: number): void };
@@ -824,4 +827,119 @@ test('settings: scheme, quality and volume persist across a reload and keyboard 
   await page.getByTestId('quality').selectOption('2');
   expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'mouse', quality: 2 });
   expect(errors).toEqual([]);
+});
+
+// Touch: a phone-like context (coarse pointer, touch events). Pointer events come from CDP touch input.
+test.describe('touch and gamepad', () => {
+  test.use({ hasTouch: true, isMobile: true, viewport: { width: 640, height: 360 } });
+
+  async function touchStart(page: Page, x: number, y: number) {
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y, id: 1 }] });
+    return {
+      move: (nx: number, ny: number) => cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: nx, y: ny, id: 1 }] }),
+      end: () => cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] }),
+    };
+  }
+
+  test('touch device defaults to finger follow, menus work by tap and the hole follows the finger', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('console', (m) => {
+      if (m.type() === 'error') errors.push(m.text());
+    });
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/');
+    await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+    expect(await page.evaluate(() => window.__spaghettify.settings.scheme)).toBe('finger');
+    await page.getByTestId('play').tap();
+    await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
+
+    // Finger to the right of centre: drift right. Lifting the finger stops the steering.
+    const t = await touchStart(page, 560, 180);
+    await page.waitForFunction(() => window.__spaghettify.player.position.x > 0.5);
+    expect(await page.evaluate(() => window.__spaghettify.touch.touching)).toBe(true);
+    expect(await page.evaluate(() => window.__spaghettify.input.move.x)).toBeGreaterThan(0.5);
+    await t.end();
+    await page.waitForFunction(() => !window.__spaghettify.touch.touching);
+    await page.waitForFunction(() => window.__spaghettify.input.move.x === 0 && window.__spaghettify.input.move.y === 0);
+
+    // The pause button is a DOM button and takes a tap.
+    await page.getByTestId('pause-button').tap();
+    await expect(page.getByTestId('pause-menu')).toBeVisible();
+    expect(errors).toEqual([]);
+  });
+
+  test('joystick: steers by drag from the touch-down point, shows a stick, and the choice persists', async ({ page }) => {
+    const errors: string[] = [];
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/');
+    await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+    await page.getByTestId('title-settings').tap();
+    await page.getByTestId('control-scheme').selectOption('joystick');
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}').scheme)).toBe('joystick');
+    await page.getByTestId('settings-back').tap();
+
+    await page.reload();
+    await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+    expect(await page.evaluate(() => window.__spaghettify.settings.scheme)).toBe('joystick');
+    await page.getByTestId('play').tap();
+    await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
+
+    // Touch down left of centre without dragging: a finger-follow scheme would steer left, the joystick must not move.
+    const t = await touchStart(page, 120, 280);
+    await page.waitForTimeout(800);
+    expect(Math.abs(await page.evaluate(() => window.__spaghettify.player.position.x))).toBeLessThan(0.05);
+    await expect(page.getByTestId('joystick-base')).toBeVisible();
+
+    // Drag right: the hole moves right. Drag up: it moves toward screen up (-Z).
+    await t.move(200, 280);
+    await page.waitForFunction(() => window.__spaghettify.player.position.x > 0.5);
+    await t.move(120, 200);
+    await page.waitForFunction(() => window.__spaghettify.player.position.z < -0.5);
+    await t.end();
+    await expect(page.getByTestId('joystick-base')).toBeHidden();
+    expect(errors).toEqual([]);
+  });
+
+  test('gamepad left stick moves the hole', async ({ page }) => {
+    await page.addInitScript(() => {
+      (window as unknown as { __pad: number[] }).__pad = [0, 0];
+      navigator.getGamepads = () =>
+        [{ connected: true, axes: (window as unknown as { __pad: number[] }).__pad, buttons: [] } as unknown as Gamepad];
+    });
+    await page.goto('/');
+    await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+    await page.getByTestId('play').tap();
+    await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
+    // Stick right, then stick up (axis y is negative when pushed up): +X, then -Z.
+    await page.evaluate(() => ((window as unknown as { __pad: number[] }).__pad[0] = 1));
+    await page.waitForFunction(() => window.__spaghettify.player.position.x > 0.5);
+    await page.evaluate(() => {
+      const pad = (window as unknown as { __pad: number[] }).__pad;
+      pad[0] = 0;
+      pad[1] = -1;
+    });
+    await page.waitForFunction(() => window.__spaghettify.player.position.z < -0.5);
+  });
+
+  test('juice: a big meal shakes the camera, a tiny one only kicks it', async ({ page }) => {
+    await page.goto('/');
+    await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+    await page.getByTestId('play').tap();
+    await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
+    await page.evaluate(() => {
+      window.__spaghettify.hunger.enabled = false;
+      const { player } = window.__spaghettify;
+      player.eat(0.001, { name: 'dust grain', radius: player.radius * 0.05 });
+    });
+    const tiny = await page.evaluate(() => window.__spaghettify.camera);
+    expect(tiny.shake).toBe(0);
+    await page.evaluate(() => {
+      const { player } = window.__spaghettify;
+      player.eat(0.01, { name: 'rock', radius: player.radius * 0.9 });
+    });
+    const big = await page.evaluate(() => window.__spaghettify.camera);
+    expect(big.shake).toBeGreaterThan(0);
+    expect(big.kick).toBeGreaterThan(0);
+  });
 });

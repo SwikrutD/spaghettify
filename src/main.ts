@@ -1,10 +1,12 @@
 import * as THREE from 'three';
-import { HUNGER, LIGHTING, RENDER, TIERS } from './config';
+import { HUNGER, JUICE, LIGHTING, RENDER, TIERS } from './config';
 import { AudioEngine } from './audio/AudioEngine';
 import { PreyField } from './entities/PreyField';
 import { InputManager } from './input/InputManager';
+import { GamepadInput } from './input/GamepadInput';
 import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
+import { TouchInput } from './input/TouchInput';
 import { Hunger } from './player/Hunger';
 import { Player } from './player/Player';
 import { GameCamera } from './render/GameCamera';
@@ -34,7 +36,12 @@ scene.add(starfield.points, player.group, prey.mesh, new THREE.AmbientLight(0xff
 const audio = new AudioEngine();
 const settings = new Settings();
 player.onEat = (_mass, what) => {
-  if (what) audio.eat(what.radius, player.radius);
+  if (!what) return;
+  audio.eat(what.radius, player.radius);
+  // Eat feedback: every meal kicks the camera in a little, big ones also shake it.
+  const ratio = what.radius / player.radius;
+  gameCamera.addKick(ratio * JUICE.kickPerRatio);
+  if (ratio >= JUICE.shakeMinRatio) gameCamera.addShake(Math.min(JUICE.shakeMax, ratio * JUICE.shakePerRatio));
 };
 
 const banner = new TierBanner();
@@ -44,6 +51,7 @@ tiers.onTierUp = (tier, index) => {
   prey.setTier(tier);
   banner.show(index + 1, tier.title);
   audio.tierUp();
+  gameCamera.addShake(JUICE.tierShake);
 };
 const hunger = new Hunger(player);
 const hungerOverlay = new HungerOverlay();
@@ -81,8 +89,11 @@ function resetRun(): void {
 }
 
 const renderer = new Renderer(canvas, scene, gameCamera.camera, player);
+const touch = new TouchInput(canvas);
 const input = new InputManager([
   { id: 'keyboard', source: new KeyboardInput() },
+  { id: 'gamepad', source: new GamepadInput() },
+  { id: 'touch', source: touch },
   { id: 'mouse', source: new MouseInput(canvas) },
 ]);
 
@@ -96,6 +107,10 @@ let settingsReturn: 'title' | 'pause' = 'title';
 
 function applySettings(): void {
   input.setEnabled('mouse', settings.scheme === 'mouse');
+  const touchScheme = settings.scheme === 'finger' || settings.scheme === 'joystick';
+  input.setEnabled('touch', touchScheme);
+  if (touchScheme) touch.setMode(settings.scheme as 'finger' | 'joystick');
+  else touch.release();
   renderer.lensing.setQuality(settings.quality);
 }
 const syncSettingsPanel = settings.onChange;
@@ -113,6 +128,7 @@ function refreshMenus(): void {
 }
 function setMode(next: Mode): void {
   mode = next;
+  if (next !== 'playing') touch.release();
   refreshMenus();
 }
 function pause(): void {
@@ -189,6 +205,8 @@ const debug = {
   hungerOverlay,
   audio,
   settings,
+  touch,
+  input,
   get mode() {
     return mode;
   },

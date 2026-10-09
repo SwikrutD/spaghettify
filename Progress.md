@@ -1,15 +1,15 @@
 # Progress - Spaghettify
 
 ## Next session
-M7 part 3: mobile touch controls (finger follow and a virtual joystick, toggle in settings, remembered in localStorage), gamepad left stick, and juice (screen shake or hit feedback, eat pops, tier set piece polish). Recommended: Sonnet 5.5, medium (UI and input work, per the milestone list). Add the touch sources as `InputSource`s registered in `InputManager` in `src/main.ts` (ids 'touch', 'gamepad') and extend `Settings.scheme` plus the control scheme select in `SettingsPanel`. Test on a phone if possible.
-How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste the start prompt below.
+M8 performance pass: object pooling and entity budgets check, draw calls, shader cost (disk layers and noise octaves per quality level, lens cost), auto quality scaling on bad frame time (render resolution first, then bloom, then lensing detail), and a real phone test. Recommended: Opus 5.5, high (performance work, per the milestone list). The user should also playtest M7 on a phone first: touch feel (`INPUT.touchFullSpeedRadius`, `joystickRadius`) and juice (`JUICE`) are untuned by hand.
+How to start: `/clear`, then `/model` (Opus 5.5, high), then paste the start prompt below.
 
 ```
-Start Milestone 7 part 3 (mobile touch controls, gamepad and juice) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 8 (performance pass) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: touch input with a finger follow mode and a virtual joystick mode, chosen in the settings panel and remembered in localStorage (extend Settings.scheme and the control scheme select; keep mouse and keyboard working); gamepad left stick support; light juice (eat feedback, camera shake on big meals or tier-up). All input goes through InputManager as InputSources. Touch must also work on the title, pause and settings menus (buttons are DOM). No em dashes, no serial commas, ASCII quotes in player-facing copy.
+Goal: hit 60 fps on a mid-range laptop and a recent phone. Profile frame time (render passes, disk fill cost, lens, prey instancing), add per-quality-level reductions (DISK.layers and noiseOctaves, bloom, render resolution) and automatic quality scaling when frame time is bad (resolution first, then bloom, then lensing detail), confirm pooling and entity budgets, and keep the Settings quality select working with the auto scaler. Known concern: the disk shader is 3 layers x 2 flow phases x 3 octaves per pixel and is unverified on a phone.
 
-Done when: tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test; add tests for touch follow, the joystick and settings persistence using Playwright touch emulation where practical). Update Progress.md and commit at the end.
+Done when: tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test), numbers before and after are recorded in Progress.md, and the work is committed. Update Progress.md at the end.
 ```
 
 ## Milestones
@@ -22,7 +22,7 @@ Suggested model/effort in brackets.
 - [x] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest)
-- [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (split: part 1 audio DONE 2026-10-09, part 2 title/pause/settings DONE 2026-10-09, part 3 mobile controls and juice)
+- [x] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest; part 1 audio, part 2 menus, part 3 touch, gamepad and juice)
 - [ ] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high]
 - [ ] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium]
 - [ ] Post-MVP: more tiers, daily seed, leaderboard, multiplayer
@@ -115,6 +115,14 @@ Suggested model/effort in brackets.
   - Smoke tests: every existing test presses Play first (`startRun`, synthetic click so the pointer stays put; audio tests use a real click). New tests: title (best, idle until Play, nickname clean and persist), pause (Escape, button, blur, resume, settings, quit), settings persistence and keyboard-only ignoring the mouse. 13 tests pass.
   - Not judged by a human: menu look and layout, phone layout of the menus.
 
+- 2026-10-09 M7 part 3: touch, gamepad and juice (awaiting human playtest on a phone).
+  - `src/input/TouchInput.ts`: pointer events (touch and pen, never mouse) on the canvas only, so DOM menus take taps normally. One finger at a time. Mode `finger`: offset from screen centre like the mouse (`INPUT.touchFullSpeedRadius` 0.22). Mode `joystick`: floating stick anchored where the thumb lands, drag steers (`INPUT.joystickRadius` 0.12 of the short side), base and knob are fixed DOM circles (`joystick-base`, `joystick-knob`) shown only while dragging. `release()` drops a held touch when paused or the scheme changes.
+  - `src/input/GamepadInput.ts`: first connected pad, left stick (radial deadzone `INPUT.gamepadDeadzone` 0.18, rescaled) with D-pad as fallback. Registered before touch and mouse; always on.
+  - `Settings.scheme` is now `mouse | keyboard | finger | joystick` (same stored shape, validated on load). First run on a touch-first device (`pointer: coarse` and `hover: none`) defaults to `finger` (`MENU.defaultTouchScheme`). The control select has four entries. `applySettings` in main enables the touch source for finger and joystick, the mouse source only for mouse.
+  - Juice (`JUICE` config): any meal adds a small camera zoom kick scaled by prey radius over hole radius; meals of at least 0.35 of the hole radius also shake the camera; tier-up adds a bigger shake. `GameCamera.shake`, `kick`, `addShake`, `addKick`; both decay on their own and reset with the run. Existing eat audio, disk heat and tier flash are unchanged.
+  - Smoke tests (17 pass): touch device (emulated mobile context) defaults to finger, taps Play and the pause button, finger steers and lifting stops input; joystick does not move on touch-down alone, shows the stick, steers right and up by drag, persists across reload; gamepad stick right and up (stubbed `navigator.getGamepads`); big meal shakes, tiny one does not. Debug handle gained `touch` and `input`.
+  - Not judged by a human: touch feel, stick size, shake and kick strength, whether the keyboard and gamepad sources are accidentally hit on a phone (they are idle, so no).
+
 ## In progress
 (nothing)
 
@@ -156,6 +164,7 @@ Suggested model/effort in brackets.
 ## Known bugs
 - Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
 - Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score. The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
+- Touch: scheme changes only take effect from the settings panel; a Chrome pull-to-refresh or iOS Safari edge gestures are not blocked beyond `touch-action: none` on the canvas. No haptics.
 - Menus: the music/drone keeps playing at its last level while paused.
 - Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.
 - Spaghetti: a stream behind the hole is lifted by the lens and wraps along the shadow edge instead of visibly entering the core. Looks like a photon-ring wrap; judge in playtest.
@@ -176,5 +185,5 @@ Suggested model/effort in brackets.
 - Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.
 - Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. Pause now freezes hunger.
 - Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
-- Not yet playtested on a phone (no touch input until M7). Lens cost on a phone unknown; drop it to quality 1 first.
+- Not yet playtested on a phone (touch input exists since M7 part 3). Lens cost on a phone unknown; drop it to quality 1 first.
 - Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?
