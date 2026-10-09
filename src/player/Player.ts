@@ -1,6 +1,11 @@
 import * as THREE from 'three';
-import { PLAYER } from '../config';
+import { GROWTH, PLAYER } from '../config';
 import type { MoveVector } from '../input/InputSource';
+
+/** Mass of a sphere-ish body of the given radius. Shared by the player and prey so eating is consistent. */
+export function massOfRadius(radius: number): number {
+  return GROWTH.massDensity * radius * radius * radius;
+}
 
 /**
  * The baby black hole. Gameplay runs on the XZ plane (y = 0).
@@ -10,7 +15,13 @@ export class Player {
   readonly group = new THREE.Group();
   readonly position = this.group.position;
   readonly velocity = new THREE.Vector3();
+  /** Visible radius. Chases radiusForMass(mass) so growth is smooth. */
   radius: number = PLAYER.startRadius;
+  mass = massOfRadius(PLAYER.startRadius);
+  /** Total mass eaten this run. */
+  eatenMass = 0;
+  eatenCount = 0;
+  private readonly startMass = this.mass;
 
   constructor() {
     const core = new THREE.Mesh(
@@ -36,6 +47,22 @@ export class Player {
     this.velocity.z += (tz - this.velocity.z) * k;
     this.velocity.multiplyScalar(Math.exp(-PLAYER.drag * dt));
     this.position.addScaledVector(this.velocity, dt);
+
+    const target = this.radiusForMass();
+    this.setRadius(this.radius + (target - this.radius) * (1 - Math.exp(-GROWTH.radiusSmoothing * dt)));
+  }
+
+  /** Absorb a prey object of the given mass. */
+  eat(preyMass: number): void {
+    const gained = preyMass * GROWTH.absorbEfficiency;
+    this.mass += gained;
+    this.eatenMass += gained;
+    this.eatenCount++;
+  }
+
+  /** Continuous mass-to-radius curve. */
+  radiusForMass(): number {
+    return PLAYER.startRadius * Math.pow(this.mass / this.startMass, GROWTH.radiusExponent);
   }
 
   setRadius(r: number): void {

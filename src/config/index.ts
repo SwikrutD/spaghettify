@@ -11,6 +11,65 @@ export const PLAYER = {
   drag: 0.4,
 } as const;
 
+export const GROWTH = {
+  /** Mass of an object of radius r is massDensity * r^3 (the player starts with the same rule). */
+  massDensity: 1,
+  /** Fraction of a prey object's mass that the player absorbs. */
+  absorbEfficiency: 1,
+  /** radius = startRadius * (mass / startMass) ^ radiusExponent. 1/3 would conserve volume; higher grows faster. */
+  radiusExponent: 0.5,
+  /** How quickly the visible radius chases the radius implied by mass (1/s). */
+  radiusSmoothing: 5,
+} as const;
+
+export const PREY = {
+  /** Fixed pool size (entity budget). Placeholder until tiers arrive in M5. */
+  count: 60,
+  /** Prey radius range as a multiple of the player radius at spawn time. Sampled log-uniformly. */
+  sizeRelMin: 0.2,
+  sizeRelMax: 2.2,
+  /** Player can eat an object whose radius is below this fraction of its own radius. */
+  edibleRatio: 0.95,
+  /** Eaten when the distance to the player is below playerRadius + preyRadius * eatReach. */
+  eatReach: 0.25,
+  /** Initial fill: spawn distance range in player radii. */
+  initialInner: 4,
+  initialOuter: 32,
+  /** Respawn ring (player radii), just beyond the visible area. */
+  respawnInner: 26,
+  respawnOuter: 34,
+  /** Objects farther than this many player radii are recycled. */
+  despawnDistance: 44,
+  /** Off-screen prey smaller than this fraction of the minimum spawn size (relative to the player) are recycled. */
+  staleRatio: 0.6,
+  /** Max drift speed in player radii per second. */
+  driftSpeed: 0.12,
+  /** Max spin speed in rad/s. */
+  spinSpeed: 0.8,
+  /** Seconds to scale in after spawning. */
+  appearTime: 0.5,
+  /** Seconds for an eaten object to shrink into the hole. */
+  eatTime: 0.22,
+  /** Rock surface roughness (fraction of radius) and mesh detail. */
+  roughness: 0.18,
+  meshDetail: 2,
+  /** Colour palette (HSL) for prey. */
+  hueMin: 0.04,
+  hueMax: 0.12,
+  satMin: 0.05,
+  satMax: 0.35,
+  lightMin: 0.35,
+  lightMax: 0.6,
+} as const;
+
+export const LIGHTING = {
+  ambient: 0.35,
+  key: 2.2,
+  keyColor: 0xfff1e0,
+  /** Direction the key light comes from. */
+  keyPosition: [-0.5, 1, 0.4],
+} as const;
+
 export const INPUT = {
   /** Pointer distance from screen centre (fraction of the shorter screen side) that gives full speed. */
   mouseFullSpeedRadius: 0.3,
