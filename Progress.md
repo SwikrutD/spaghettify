@@ -1,17 +1,15 @@
 # Progress - Spaghettify
 
 ## Next session
-M7 part 1: Web Audio (ambient drone reacting to size and hunger, synthesized SFX: eat, grow, tier-up, danger, evaporate) plus the music and SFX volume sliders and a mute toggle. Recommended: Sonnet 5.5, medium (per milestone list; M7 is split into audio first, then title/pause/settings UI and mobile controls, because it is too big for one segment). Playtest M6 first and report tweaks to `HUNGER` (src/config/index.ts).
+M7 part 2: title screen (play button, best score, nickname entry), pause menu (resume, quit run, pause on tab blur) and settings panel (music and SFX sliders, mute, control scheme, quality level). Recommended: Sonnet 5.5, medium (UI work, per the milestone list). Reuse `AudioEngine` setters and `AudioPanel`; fold the corner panel into the settings panel. Listen to the game first (audio is judged by ear, not yet heard by a human) and report tweaks to `AUDIO` in src/config/index.ts.
 How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste the start prompt below.
 
 ```
-Start Milestone 7 part 1 (audio) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 7 part 2 (title, pause and settings UI) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: Web Audio API only, no asset files. An ambient drone that reacts to hole size (tier or radius) and to hunger (Hunger.level / HungerOverlay.level), plus synthesized SFX for eat (pitch by prey size), grow, tier-up (hook TierDirector.onTierUp), danger/hunger warning and evaporate (Hunger.onEnd / phase 'evaporating'). Separate music and SFX gain nodes with volume sliders and a mute toggle, persisted in localStorage (try/catch). Audio must start after the first user gesture. Put tunables in a new AUDIO block in src/config. Code goes under src/audio/. Do not build the title screen, pause menu or mobile controls (later M7 parts). Player-facing copy: no em dashes, no serial commas, ASCII quotes.
+Goal: a title screen (play button, best score from localStorage spaghettify.best, nickname entry saved in localStorage), a pause menu (resume and quit run, also pauses on tab blur and with Escape; the game loop must stop advancing hunger and prey while paused) and a settings panel (music and SFX sliders and mute using the existing AudioEngine setters, control scheme toggle for mouse follow vs keyboard, quality level wired to renderer.lensing.setQuality). Replace the corner AudioPanel with the settings panel. The run should not start until Play is pressed. All input still goes through InputManager. Player-facing copy: no em dashes, no serial commas, ASCII quotes. Do not build mobile touch controls or juice (part 3).
 
-Hooks that exist: window.__spaghettify exposes player, prey, tiers, hunger, hungerOverlay, camera, renderer. Player.eat(mass, what) is the eat event, Hunger.phase is 'playing' | 'evaporating' | 'over', ScoreScreen.onRestart restarts the run.
-
-Done when: sound plays for each event in a manual check, no console errors with audio blocked or unavailable, and tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test). Add a smoke test that the audio context is created after a click and the mute toggle works. Update Progress.md and commit at the end.
+Done when: tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test; update the existing tests for the title screen so they press Play first and add tests for pause, settings persistence and the title screen). Update Progress.md and commit at the end.
 ```
 
 ## Milestones
@@ -24,7 +22,7 @@ Suggested model/effort in brackets.
 - [x] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest)
-- [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (split: part 1 audio, part 2 title/pause/settings, part 3 mobile controls and juice)
+- [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (split: part 1 audio DONE 2026-10-09, part 2 title/pause/settings, part 3 mobile controls and juice)
 - [ ] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high]
 - [ ] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium]
 - [ ] Post-MVP: more tiers, daily seed, leaderboard, multiplayer
@@ -99,6 +97,15 @@ Suggested model/effort in brackets.
   - Smoke test 7: eat, skip the grace period, mass drains and the warning and disk dimming show, push to the floor, score screen stats match the debug handle, PLAY AGAIN gives a fresh run that can eat. The tier and speed tests set `hunger.enabled = false`. Also made test 2 robust (big object must be over 2x the player radius).
   - Not judged by a human: vignette look, disk dimming, pacing of the drain, the score screen layout.
 
+- 2026-10-09 M7 part 1: audio (awaiting human listen).
+  - `src/audio/AudioEngine.ts`: creates the AudioContext on the first pointerdown, keydown or touchend (all calls are safe and silent if Web Audio is missing or blocked; errors in audio code are swallowed). Buses: drone -> musicGain, sfx -> sfxGain, both -> master (mute = master 0). Suspends on tab hide. Volume curve is slider squared. Music, SFX and mute persist in localStorage `spaghettify.audio` (try/catch). `played` counts triggers per effect (debug and tests).
+  - `src/audio/Drone.ts`: two detuned saws, sub sine, noise rumble and a dissonant triangle through a lowpass. Bigger hole: lower pitch and darker filter. Hunger: wider detune, closing filter, tremolo that speeds up, dissonant voice fades in. Fades out on evaporation, in on restart.
+  - `src/audio/Sfx.ts`: eat (pitch dive, higher for small prey relative to the hole, lower plus noise puff for big, rate limited), grow (3 note chime each time radius grows 18 percent), tier-up (sweep plus chord, from `TierDirector.onTierUp`), hunger warning pulse (faster and higher with hunger level above 0.3), evaporate (falling sweep when `Hunger.phase` becomes 'evaporating').
+  - `src/ui/AudioPanel.ts`: temporary corner speaker button (mute, also the M key) with music and SFX sliders on hover. Part 2 replaces it with the settings panel.
+  - `Player.onEat` callback added (fires in `Player.eat`). `AUDIO` block in src/config/index.ts holds every tunable.
+  - Smoke tests 8 to 10: context is null before a click and exists after it; eating counts an eat sound; mute by button and M key (gains 0, aria-pressed, localStorage) and persists after reload; tier-up, warning and evaporate each trigger once and restart is clean; with AudioContext and localStorage removed the game runs with no errors.
+  - Not heard by a human. Headless tests only prove triggers and wiring, not how it sounds.
+
 ## In progress
 (nothing)
 
@@ -133,9 +140,12 @@ Suggested model/effort in brackets.
 - 2026-10-09: Tier stays monotonic when hunger shrinks the hole (a tier is "reached", and going back down would replay the set piece). The score screen reports the highest tier reached.
 - 2026-10-09: The fail floor is relative to the run's peak mass (half of it) so starving matters at every size; an absolute floor alone would take a minute to hit at planet mass. Mass lost to hunger is never regained, so the floor only moves up.
 - 2026-10-09: Score = mass eaten x 1000 so the first meals (dust grains of mass 0.0025) still count.
+- 2026-10-09: Audio is event-driven through small hooks (`Player.onEat`, `TierDirector.onTierUp`, per-frame `audio.update` for the phase and hunger level) so game logic never imports audio. The AudioContext is made lazily on the first gesture. Grow chime is radius-step based (not every meal) to avoid noise.
 - 2026-10-09: Hunger runs on game time (so it pauses in tier-up slow motion); the final evaporation runs on real time.
 
 ## Known bugs
+- Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
+- Audio: the volume sliders are disabled while muted, and the corner panel overlaps nothing but is placeholder UI until part 2.
 - Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.
 - Spaghetti: a stream behind the hole is lifted by the lens and wraps along the shadow edge instead of visibly entering the core. Looks like a photon-ring wrap; judge in playtest.
 - Spaghetti: the 6x stretched rock shows its low-poly facets (mesh detail 2). Fine with the flat-shaded look; raise `PREY.meshDetail` if it reads badly.
@@ -152,6 +162,7 @@ Suggested model/effort in brackets.
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 
 ## Open questions
+- Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.
 - Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. No pause menu yet, so a tab left idle in the background still evaporates (frames are capped at 0.05 s per frame, so it is slow when hidden).
 - Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
 - Not yet playtested on a phone (no touch input until M7). Lens cost on a phone unknown; drop it to quality 1 first.

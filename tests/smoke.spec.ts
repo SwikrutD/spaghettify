@@ -33,6 +33,14 @@ interface Debug {
       geometry: { attributes: { aStretch: { array: Float32Array } } };
     };
   };
+  audio: {
+    context: unknown;
+    state: string;
+    muted: boolean;
+    music: number;
+    played: Record<string, number>;
+    gainFor(bus: 'music' | 'sfx'): number;
+  };
   renderer: {
     lensing: { centre: { x: number; y: number }; coreRadius: number; setQuality(level: number): void };
   };
@@ -512,5 +520,128 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   });
   expect(ate).toBeGreaterThan(0);
 
+  expect(errors).toEqual([]);
+});
+
+test('audio: the context is created after a click, events trigger sounds, and the mute toggle works', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+
+  // Browsers block audio before a gesture: no context yet, and the game runs fine without one.
+  expect(await page.evaluate(() => window.__spaghettify.audio.context)).toBeNull();
+
+  await page.mouse.click(640, 360);
+  await page.waitForFunction(() => window.__spaghettify.audio.context !== null);
+  expect(await page.evaluate(() => window.__spaghettify.audio.state)).not.toBe('closed');
+
+  // Eating triggers the eat sound.
+  await page.evaluate(() => {
+    const { player, prey } = window.__spaghettify;
+    const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
+    if (!target) throw new Error('no edible prey in the pool');
+    player.position.x = target.position.x;
+    player.position.z = target.position.z;
+  });
+  await page.waitForFunction(() => (window.__spaghettify.audio.played.eat ?? 0) > 0);
+
+  // Mute toggle: button and the M key. State, aria-pressed, gains and localStorage all follow.
+  const button = page.getByTestId('mute-toggle');
+  await expect(button).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => window.__spaghettify.audio.gainFor('music'))).toBeGreaterThan(0);
+  await button.click();
+  await expect(button).toHaveAttribute('aria-pressed', 'true');
+  expect(await page.evaluate(() => window.__spaghettify.audio.muted)).toBe(true);
+  expect(await page.evaluate(() => window.__spaghettify.audio.gainFor('music') + window.__spaghettify.audio.gainFor('sfx'))).toBe(0);
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.audio') ?? '{}').muted)).toBe(true);
+  await page.keyboard.press('KeyM');
+  await expect(button).toHaveAttribute('aria-pressed', 'false');
+  expect(await page.evaluate(() => window.__spaghettify.audio.muted)).toBe(false);
+
+  // The saved choice survives a reload, and the sliders change the stored volume.
+  await button.click();
+  await page.reload();
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  expect(await page.evaluate(() => window.__spaghettify.audio.muted)).toBe(true);
+  await page.evaluate(() => localStorage.removeItem('spaghettify.audio'));
+
+  expect(errors).toEqual([]);
+});
+
+test('audio: tier-up, hunger warning and evaporation each trigger their sound; restart is clean', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.setViewportSize({ width: 480, height: 320 });
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await page.mouse.click(240, 160);
+  await page.waitForFunction(() => window.__spaghettify.audio.context !== null);
+
+  // Tier-up: set the mass just under tier 2 and eat something.
+  await page.evaluate(() => {
+    const { player, prey, allTiers, hunger } = window.__spaghettify;
+    hunger.enabled = false;
+    player.mass = allTiers[1].minMass - 0.01;
+    const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
+    if (!target) throw new Error('no edible prey in the pool');
+    player.position.x = target.position.x;
+    player.position.z = target.position.z;
+  });
+  await page.waitForFunction(() => (window.__spaghettify.audio.played.tierUp ?? 0) > 0);
+
+  // Hunger: the warning pulses, then the evaporation sound plays once.
+  await page.evaluate(() => {
+    const { hunger } = window.__spaghettify;
+    hunger.enabled = true;
+    hunger.idle = 100;
+  });
+  await page.waitForFunction(() => (window.__spaghettify.audio.played.warning ?? 0) > 0);
+  await page.waitForFunction(() => window.__spaghettify.hunger.phase !== 'playing', undefined, { timeout: 30_000 });
+  await page.evaluate(() => {
+    const { player, hunger } = window.__spaghettify;
+    player.mass = hunger.floorMass * 0.9;
+  });
+  await page.waitForFunction(() => window.__spaghettify.audio.played.evaporate === 1);
+
+  // Restart keeps working with audio (no errors, drone fades back in).
+  await page.getByText('PLAY AGAIN').click();
+  await page.waitForFunction(() => window.__spaghettify.hunger.phase === 'playing');
+  expect(errors).toEqual([]);
+});
+
+test('audio: with Web Audio unavailable the game still runs and nothing errors', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'AudioContext', { value: undefined });
+    Object.defineProperty(window, 'webkitAudioContext', { value: undefined });
+    Object.defineProperty(window, 'localStorage', { get: () => { throw new Error('blocked'); } });
+  });
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await page.mouse.click(640, 360);
+  await page.getByTestId('mute-toggle').click();
+  await page.evaluate(() => {
+    const { player, prey } = window.__spaghettify;
+    const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
+    if (!target) throw new Error('no edible prey in the pool');
+    player.position.x = target.position.x;
+    player.position.z = target.position.z;
+  });
+  await page.waitForFunction(() => window.__spaghettify.player.eatenCount > 0);
+  expect(await page.evaluate(() => window.__spaghettify.audio.context)).toBeNull();
   expect(errors).toEqual([]);
 });

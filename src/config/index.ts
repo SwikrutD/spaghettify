@@ -297,3 +297,97 @@ export const STARFIELD = {
   minDepth: 20,
   maxDepth: 120,
 } as const;
+
+export const AUDIO = {
+  storageKey: 'spaghettify.audio',
+  /** Defaults when nothing is stored (0..1 sliders). */
+  defaultMusic: 0.6,
+  defaultSfx: 0.8,
+  /** Slider value is squared to get gain (closer to perceived loudness). */
+  volumeCurve: 2,
+  /** Seconds for volume and mute changes to settle (avoids clicks). */
+  volumeSmoothing: 0.03,
+  /** Peak gains before the sliders. */
+  musicLevel: 0.5,
+  sfxLevel: 0.7,
+
+  drone: {
+    /** Pitch of the drone at the starting radius (Hz); it falls as the hole grows. */
+    baseFreq: 82,
+    minFreq: 30,
+    /** Frequency = baseFreq * (radius / startRadius) ^ -pitchExponent. */
+    pitchExponent: 0.3,
+    /** Lowpass cutoff when small and when huge (Hz); hunger closes it by `hungerCutoffScale`. */
+    cutoffSmall: 900,
+    cutoffBig: 260,
+    hungerCutoffScale: 0.35,
+    /** Detune between the two saws in cents; hunger widens it. */
+    detune: 7,
+    hungerDetune: 45,
+    /** Dissonant extra voice (ratio to the root) that fades in with hunger. */
+    dissonantRatio: 1.4142,
+    dissonantLevel: 0.35,
+    /** Tremolo that quickens with hunger (Hz) and its depth at full hunger. */
+    tremoloMin: 0.15,
+    tremoloMax: 5.5,
+    tremoloDepth: 0.5,
+    /** Level of each part. */
+    sawLevel: 0.16,
+    subLevel: 0.4,
+    rumbleLevel: 0.1,
+    /** Seconds for pitch and filter to follow the game. */
+    follow: 0.4,
+    /** Seconds to fade the drone out when the hole evaporates and back in on restart. */
+    fadeOut: 1.4,
+    fadeIn: 1.5,
+  },
+
+  eat: {
+    /** Pitch (Hz) of the smallest and the biggest meal; bigger prey sound lower. */
+    freqSmall: 1400,
+    freqBig: 200,
+    /** Prey radius as a fraction of the hole radius mapped to freqSmall..freqBig. */
+    relSmall: 0.05,
+    relBig: 0.95,
+    duration: 0.12,
+    bigDuration: 0.35,
+    level: 0.35,
+    /** Minimum seconds between eat sounds, and the most overlapping at once. */
+    minGap: 0.035,
+  },
+
+  grow: {
+    /** A growth chime plays each time the radius grows by this factor since the last one. */
+    radiusStep: 1.18,
+    freqs: [330, 495, 660],
+    level: 0.25,
+    noteGap: 0.06,
+  },
+
+  tierUp: {
+    level: 0.5,
+    sweepFrom: 70,
+    sweepTo: 440,
+    sweepTime: 0.9,
+    /** Chord (Hz) that blooms after the sweep. */
+    chord: [220, 330, 440, 660],
+    chordTime: 1.8,
+  },
+
+  warning: {
+    /** Hunger level (0..1) above which the warning pulses start. */
+    startLevel: 0.3,
+    freq: 150,
+    level: 0.4,
+    /** Seconds between pulses at the start level and at full hunger. */
+    periodSlow: 1.1,
+    periodFast: 0.35,
+  },
+
+  evaporate: {
+    level: 0.6,
+    time: 1.8,
+    sweepFrom: 900,
+    sweepTo: 28,
+  },
+} as const;

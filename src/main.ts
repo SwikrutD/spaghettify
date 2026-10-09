@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { HUNGER, LIGHTING, RENDER, TIERS } from './config';
+import { AudioEngine } from './audio/AudioEngine';
 import { PreyField } from './entities/PreyField';
 import { InputManager } from './input/InputManager';
 import { KeyboardInput } from './input/KeyboardInput';
@@ -10,6 +11,7 @@ import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
 import { createStarfield } from './scene/Starfield';
 import { TierDirector } from './spawning/TierDirector';
+import { AudioPanel } from './ui/AudioPanel';
 import { HungerOverlay } from './ui/HungerOverlay';
 import { ScoreScreen } from './ui/ScoreScreen';
 import { TierBanner } from './ui/TierBanner';
@@ -26,12 +28,19 @@ const keyLight = new THREE.DirectionalLight(LIGHTING.keyColor, LIGHTING.key);
 keyLight.position.set(...LIGHTING.keyPosition);
 scene.add(starfield.points, player.group, prey.mesh, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
 
+const audio = new AudioEngine();
+new AudioPanel(audio);
+player.onEat = (_mass, what) => {
+  if (what) audio.eat(what.radius, player.radius);
+};
+
 const banner = new TierBanner();
 // Crossing a mass threshold: new prey table and entity budget, camera scale eases out, flash and banner.
 tiers.onTierUp = (tier, index) => {
   gameCamera.setTierScale(tier.cameraScale);
   prey.setTier(tier);
   banner.show(index + 1, tier.title);
+  audio.tierUp();
 };
 const hunger = new Hunger(player);
 const hungerOverlay = new HungerOverlay();
@@ -80,6 +89,7 @@ scoreScreen.onRestart = () => {
   hunger.reset();
   hungerOverlay.reset();
   banner.reset();
+  audio.reset(player.radius);
 };
 
 const renderer = new Renderer(canvas, scene, gameCamera.camera, player);
@@ -103,6 +113,7 @@ const debug = {
   tiers,
   hunger,
   hungerOverlay,
+  audio,
   allTiers: TIERS,
   camera: gameCamera,
   renderer,
@@ -127,6 +138,7 @@ function frame(now: number): void {
   hungerOverlay.update(realDt, hunger.level);
   player.disk.starvation = hungerOverlay.level;
   prey.update(dt);
+  audio.update(realDt, player.radius, hungerOverlay.level, hunger.phase);
   gameCamera.punch = tiers.punch;
   gameCamera.update(realDt, player.position, player.radius);
   starfield.update(player.position, gameCamera.viewScale);

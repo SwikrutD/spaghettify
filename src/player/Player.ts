@@ -27,6 +27,8 @@ export class Player {
   canEat = true;
   /** Biggest thing eaten this run. */
   biggestEaten: { name: string; radius: number } | null = null;
+  /** Called after each meal with the prey mass and what was eaten. */
+  onEat: ((preyMass: number, what?: { name: string; radius: number }) => void) | null = null;
   readonly disk = new AccretionDisk();
   private readonly startMass = this.mass;
 
@@ -80,6 +82,7 @@ export class Player {
     this.eatenMass += gained;
     this.eatenCount++;
     this.disk.feed(gained / this.mass);
+    this.onEat?.(preyMass, what);
   }
 
   /** Continuous mass-to-radius curve. */
