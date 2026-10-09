@@ -7,6 +7,7 @@ interface Debug {
     radius: number;
     mass: number;
     eatenCount: number;
+    disk: { heat: number };
   };
   prey: {
     objects: { position: { x: number; z: number }; radius: number; state: string }[];
@@ -71,10 +72,12 @@ test('eating a smaller object grows the player; bigger objects are left alone', 
     // Park the player on the prey so contact is guaranteed.
     player.position.x = target.position.x;
     player.position.z = target.position.z;
-    return { radius: player.radius, mass: player.mass, eaten: player.eatenCount };
+    return { radius: player.radius, mass: player.mass, eaten: player.eatenCount, heat: player.disk.heat };
   });
 
   await page.waitForFunction((r) => window.__spaghettify.player.radius > r, before.radius);
+  // Feeding heats the accretion disk.
+  await page.waitForFunction((h) => window.__spaghettify.player.disk.heat > h, before.heat);
   const after = await page.evaluate(() => {
     const { player } = window.__spaghettify;
     return { radius: player.radius, mass: player.mass, eaten: player.eatenCount };

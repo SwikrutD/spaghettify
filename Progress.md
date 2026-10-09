@@ -1,14 +1,14 @@
 # Progress - Spaghettify
 
 ## Next session
-M2 Accretion disk shader. Recommended: Opus 5.5, high (per milestone list). Replace the placeholder ring in `src/player/Player.ts` with a shader disk (own `.glsl` files under `src/shaders/`), brightening and thickening with `player.eatenMass` or radius, and retune bloom (`BLOOM` in config) so the black core stays crisp. Also user should playtest M1 feel first (growth rate, zoom) and report tweaks to `GROWTH` and `PREY` in config.
+M3 Gravitational lensing shader. Recommended: Opus 5.5, xhigh (per milestone list). Screen-space post pass that bends the background (stars, prey, the disk's own image) around the player. Must slot in before bloom and keep `CorePass` (core redrawn after bloom) working. User should also playtest M1 feel and the M2 disk first and report tweaks to `GROWTH`, `PREY`, `DISK`, `BLOOM`.
 
 ## Milestones
 Suggested model/effort in brackets.
 
 - [x] M0 Scaffold, git, controllable player, bloom [Sonnet 5.5, medium] (2026-10-08)
 - [x] M1 Core loop: eat smaller objects, grow, camera zoom scales with size [Sonnet 5.5, high] (2026-10-08, awaiting user playtest)
-- [ ] M2 Accretion disk shader [Opus 5.5, high]
+- [x] M2 Accretion disk shader [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [ ] M3 Gravitational lensing shader [Opus 5.5, xhigh]
 - [ ] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high]
 - [ ] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high]
@@ -36,6 +36,16 @@ Suggested model/effort in brackets.
   - Smoke test now has a second test: teleports onto an edible prey via the debug handle (`player`, `prey`, `prey.isEdible`), asserts mass, radius and eatenCount rise, and that a larger object is not eaten.
   - Camera zoom (`distancePerRadius` 22) was checked by screenshot at radius 0.5 and 4.5: framing stays consistent. Feel not judged by a human yet.
 
+- 2026-10-09 M2: accretion disk.
+  - `src/player/AccretionDisk.ts` (owned by `Player` as `player.disk`): disk mesh plus camera-facing photon ring, both additive. Disk is one 3-layer stacked ring geometry (one draw call); the vertex shader remaps it to `[innerRadius, outer]` and flares the layers apart in height.
+  - `src/shaders/accretionDisk.{vert,frag}.glsl`: Shakura-Sunyaev temperature profile, blackbody colour, relativistic Doppler beaming (left side brighter and bluer with CCW spin), Keplerian swirl with a two-phase flow-map cross-fade so the turbulence never winds up. `src/shaders/lib/{simplex3d,blackbody}.glsl` included via vite-plugin-glsl `#include`.
+  - `src/shaders/photonRing.{vert,frag}.glsl`: thin ring hugging the shadow for a crisp edge.
+  - Heat (0..1) drives outer radius, thickness, temperature (3800 K to 6000 K) and brightness. Heat = growth (log of eatenMass / startMass) plus activity (each meal adds gained / mass, decays). Fast rise, slow cool. All in `DISK` and `PHOTON_RING` config.
+  - `src/render/CorePass.ts`: redraws the core (camera layer 1) after bloom, depth-tested against the scene depth, so glow never washes over the shadow. Toggle `BLOOM.keepCoreBlack`.
+  - Renderer now uses ACES tone mapping (`RENDER.toneMappingExposure`). Bloom retuned to 0.4 / 0.12 / 1.0.
+  - Smoke test asserts `player.disk.heat` rises after eating.
+  - Judged by screenshot (SwiftShader) at heat 0, ~0.6 and 1. Animation (swirl speed, flow cross-fade pulsing) not yet judged by a human.
+
 ## In progress
 (nothing)
 
@@ -48,10 +58,15 @@ Suggested model/effort in brackets.
 - 2026-10-08: Growth is mass-based with mass = r^3 and radius = startRadius * (mass/startMass)^0.5, so growth outpaces volume conservation a bit to keep early runs feeling quick. Tunable via `GROWTH.radiusExponent`.
 - 2026-10-08: Prey rendered with one InstancedMesh so M4 (stretch shader) and M8 (draw calls) stay easy.
 
+- 2026-10-09: Disk feeds on a "heat" level combining long-term growth and recent accretion rate, not raw eatenMass, so the disk reacts to each meal and will dim when starving (ties into M6 hunger).
+- 2026-10-09: Core redrawn after bloom (CorePass) instead of fighting bloom settings; bloom can stay pretty without softening the shadow.
+- 2026-10-09: ACES tone mapping added because the disk is HDR. Fed disks were capped near 6000 K and given a saturation boost because hotter blackbody colours read as grey-white after tone mapping.
+
 ## Known bugs
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
 - Smoke test "bigger object not eaten" can in theory flake if the player grows enough from a stray meal during its 300 ms window.
-- Placeholder ring blooms heavily and softens the black core. Bloom is tuned (0.3 / 0.2 / 0.9) but the disk shader in M2 should retune it.
+- Disk fill cost: 3 layers x 2 flow phases x 3 noise octaves per pixel. Fine on desktop; unverified on a phone. M8 can drop `DISK.layers` or `noiseOctaves` per quality level.
+- At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 
 ## Open questions
 - Not yet playtested on a phone (no touch input until M7).

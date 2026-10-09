@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { GROWTH, PLAYER } from '../config';
 import type { MoveVector } from '../input/InputSource';
+import { CORE_LAYER } from '../render/CorePass';
+import { AccretionDisk } from './AccretionDisk';
 
 /** Mass of a sphere-ish body of the given radius. Shared by the player and prey so eating is consistent. */
 export function massOfRadius(radius: number): number {
@@ -9,7 +11,7 @@ export function massOfRadius(radius: number): number {
 
 /**
  * The baby black hole. Gameplay runs on the XZ plane (y = 0).
- * Placeholder visuals: black core plus a thin glowing ring (the real disk is M2).
+ * Visuals: a black core with an accretion disk and photon ring. The group is scaled by radius.
  */
 export class Player {
   readonly group = new THREE.Group();
@@ -21,6 +23,7 @@ export class Player {
   /** Total mass eaten this run. */
   eatenMass = 0;
   eatenCount = 0;
+  readonly disk = new AccretionDisk();
   private readonly startMass = this.mass;
 
   constructor() {
@@ -28,13 +31,9 @@ export class Player {
       new THREE.SphereGeometry(1, 48, 32),
       new THREE.MeshBasicMaterial({ color: 0x000000 }),
     );
-    const ring = new THREE.Mesh(
-      new THREE.RingGeometry(1.25, 1.9, 96),
-      // Color above 1.0 so the bloom threshold catches it.
-      new THREE.MeshBasicMaterial({ color: new THREE.Color(2.2, 1.0, 0.3), side: THREE.DoubleSide }),
-    );
-    ring.rotation.x = -Math.PI / 2;
-    this.group.add(core, ring);
+    // Also drawn after bloom so the shadow stays crisp (see CorePass).
+    core.layers.enable(CORE_LAYER);
+    this.group.add(core, this.disk.group);
     this.applyRadius();
   }
 
@@ -50,6 +49,7 @@ export class Player {
 
     const target = this.radiusForMass();
     this.setRadius(this.radius + (target - this.radius) * (1 - Math.exp(-GROWTH.radiusSmoothing * dt)));
+    this.disk.update(dt, this.eatenMass / this.startMass);
   }
 
   /** Absorb a prey object of the given mass. */
@@ -58,6 +58,7 @@ export class Player {
     this.mass += gained;
     this.eatenMass += gained;
     this.eatenCount++;
+    this.disk.feed(gained / this.mass);
   }
 
   /** Continuous mass-to-radius curve. */
