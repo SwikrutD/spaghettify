@@ -1,5 +1,5 @@
 import type { AudioEngine } from '../audio/AudioEngine';
-import { MENU } from '../config';
+import { QUALITY, type QualityChoice } from '../config';
 import type { ControlScheme, Settings } from '../settings/Settings';
 import { button, FONT, overlay, show } from './dom';
 
@@ -28,7 +28,7 @@ export class SettingsPanel {
     for (const [value, label] of [['mouse', 'Mouse follow'], ['keyboard', 'Keyboard only'], ['finger', 'Touch: finger follow'], ['joystick', 'Touch: joystick']] as const) {
       this.scheme.append(new Option(label, value));
     }
-    MENU.qualityNames.forEach((name, i) => this.quality.append(new Option(name, String(i))));
+    for (const choice of QUALITY.choices) this.quality.append(new Option(QUALITY.labels[choice], choice));
     this.scheme.dataset.testid = 'control-scheme';
     this.quality.dataset.testid = 'quality';
     this.scheme.setAttribute('aria-label', 'Controls');
@@ -53,7 +53,7 @@ export class SettingsPanel {
     this.music.input.addEventListener('input', () => this.audio.setMusic(Number(this.music.input.value)));
     this.sfx.input.addEventListener('input', () => this.audio.setSfx(Number(this.sfx.input.value)));
     this.scheme.addEventListener('change', () => this.settings.setScheme(this.scheme.value as ControlScheme));
-    this.quality.addEventListener('change', () => this.settings.setQuality(Number(this.quality.value)));
+    this.quality.addEventListener('change', () => this.settings.setQuality(this.quality.value as QualityChoice));
 
     const back = button('BACK', 'settings-back', true);
     back.addEventListener('click', () => this.onClose?.());
@@ -89,7 +89,7 @@ export class SettingsPanel {
     this.mute.textContent = a.muted ? 'UNMUTE (M)' : 'MUTE (M)';
     this.mute.setAttribute('aria-pressed', String(a.muted));
     this.scheme.value = this.settings.scheme;
-    this.quality.value = String(this.settings.quality);
+    this.quality.value = this.settings.quality;
   }
 }
 

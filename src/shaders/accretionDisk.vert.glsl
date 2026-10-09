@@ -7,6 +7,8 @@
 #include lib/lensVertex.glsl
 
 attribute float aLayer;
+// Which channel of the turbulence map holds this layer (0, 1 or 2).
+attribute float aChannel;
 
 uniform float uInner;
 uniform float uOuter;
@@ -14,6 +16,7 @@ uniform float uThickness;
 
 varying vec3 vLocal;
 varying float vLayer;
+varying vec3 vMask;
 
 void main() {
   float s = length(position.xy);
@@ -25,6 +28,7 @@ void main() {
 
   vLocal = p;
   vLayer = aLayer;
+  vMask = vec3(equal(vec3(aChannel), vec3(0.0, 1.0, 2.0)));
   vec4 viewPos = modelViewMatrix * vec4(p, 1.0);
   gl_Position = lensWarp(projectionMatrix * viewPos, viewPos);
 }

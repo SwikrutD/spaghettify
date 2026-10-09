@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { HUNGER, JUICE, LIGHTING, RENDER, TIERS } from './config';
+import { HUNGER, JUICE, LIGHTING, QUALITY, RENDER, TIERS } from './config';
 import { AudioEngine } from './audio/AudioEngine';
 import { PreyField } from './entities/PreyField';
 import { InputManager } from './input/InputManager';
@@ -9,13 +9,15 @@ import { MouseInput } from './input/MouseInput';
 import { TouchInput } from './input/TouchInput';
 import { Hunger } from './player/Hunger';
 import { Player } from './player/Player';
+import { AutoQuality } from './render/AutoQuality';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
 import { createStarfield } from './scene/Starfield';
-import { Settings } from './settings/Settings';
+import { isTouchFirst, Settings } from './settings/Settings';
 import { TierDirector } from './spawning/TierDirector';
 import { HungerOverlay } from './ui/HungerOverlay';
 import { PauseMenu } from './ui/PauseMenu';
+import { PerfOverlay } from './ui/PerfOverlay';
 import { ScoreScreen } from './ui/ScoreScreen';
 import { SettingsPanel } from './ui/SettingsPanel';
 import { TierBanner } from './ui/TierBanner';
@@ -89,6 +91,7 @@ function resetRun(): void {
 }
 
 const renderer = new Renderer(canvas, scene, gameCamera.camera, player);
+renderer.onBeforeRender = (gl) => player.disk.prepare(gl);
 const touch = new TouchInput(canvas);
 const input = new InputManager([
   { id: 'keyboard', source: new KeyboardInput() },
@@ -105,13 +108,27 @@ const pauseMenu = new PauseMenu();
 const settingsPanel = new SettingsPanel(audio, settings);
 let settingsReturn: 'title' | 'pause' = 'title';
 
+// Render quality: a fixed preset, or Auto, where the scaler picks a level from the frame time.
+const autoQuality = new AutoQuality(isTouchFirst());
+function qualityLevel(): number {
+  return settings.quality === 'auto' ? autoQuality.level : QUALITY.presets[settings.quality];
+}
+function applyQuality(index = qualityLevel()): void {
+  const level = QUALITY.levels[index];
+  renderer.setQuality(level);
+  player.disk.setDetail(level.diskLayers, level.diskOctaves);
+  player.disk.setRenderHeight(renderer.bufferHeight);
+}
+autoQuality.onChange = () => applyQuality();
+
 function applySettings(): void {
   input.setEnabled('mouse', settings.scheme === 'mouse');
   const touchScheme = settings.scheme === 'finger' || settings.scheme === 'joystick';
   input.setEnabled('touch', touchScheme);
   if (touchScheme) touch.setMode(settings.scheme as 'finger' | 'joystick');
   else touch.release();
-  renderer.lensing.setQuality(settings.quality);
+  autoQuality.setEnabled(settings.quality === 'auto');
+  applyQuality();
 }
 const syncSettingsPanel = settings.onChange;
 settings.onChange = () => {
@@ -189,6 +206,7 @@ function resize(): void {
   const w = window.innerWidth;
   const h = window.innerHeight;
   renderer.resize(w, h);
+  player.disk.setRenderHeight(renderer.bufferHeight);
   gameCamera.resize(w, h);
 }
 window.addEventListener('resize', resize);
@@ -198,6 +216,8 @@ resize();
 const pixelReads: { x: number; y: number; resolve: (rgb: number[]) => void }[] = [];
 const debug = {
   frames: 0,
+  /** Smoothed CPU milliseconds per frame (game update plus issuing the draw calls). */
+  cpuMs: 0,
   player,
   prey,
   tiers,
@@ -213,25 +233,42 @@ const debug = {
   allTiers: TIERS,
   camera: gameCamera,
   renderer,
+  autoQuality,
+  get qualityLevel() {
+    return qualityLevel();
+  },
+  /** Profiling: stop the scaler and render at one level until the next settings change. */
+  forceQuality(index: number) {
+    autoQuality.setEnabled(false);
+    applyQuality(index);
+  },
   /** Final RGB at a canvas pixel (CSS pixels, y down), read right after the next frame renders. */
   readPixel: (x: number, y: number) => new Promise<number[]>((resolve) => pixelReads.push({ x, y, resolve })),
 };
 (window as unknown as { __spaghettify: typeof debug }).__spaghettify = debug;
 
-function drawFrame(): void {
+// `?perf` in the URL shows frame time, GPU time per pass (where the browser allows it) and the quality level.
+const perfOverlay = new URLSearchParams(location.search).has('perf') ? new PerfOverlay(renderer, () => qualityLevel()) : null;
+
+function drawFrame(start: number): void {
   renderer.render();
   for (const read of pixelReads.splice(0)) read.resolve(renderer.readPixel(read.x, read.y));
   debug.frames++;
+  debug.cpuMs += (performance.now() - start - debug.cpuMs) * 0.05;
   requestAnimationFrame(frame);
 }
 
 const NO_MOVE = { x: 0, y: 0 };
 let last = performance.now();
 function frame(now: number): void {
-  const realDt = Math.min((now - last) / 1000, RENDER.maxFrameDt);
+  const start = performance.now();
+  const frameMs = now - last;
+  const realDt = Math.min(frameMs / 1000, RENDER.maxFrameDt);
   last = now;
+  autoQuality.frame(frameMs);
+  perfOverlay?.frame(frameMs, debug.cpuMs);
   if (mode !== 'playing') {
-    drawFrame();
+    drawFrame(start);
     return;
   }
   input.update();
@@ -250,6 +287,6 @@ function frame(now: number): void {
   gameCamera.update(realDt, player.position, player.radius);
   starfield.update(player.position, gameCamera.viewScale);
   banner.update(tiers.flash);
-  drawFrame();
+  drawFrame(start);
 }
 requestAnimationFrame(frame);

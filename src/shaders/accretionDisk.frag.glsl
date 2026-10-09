@@ -2,19 +2,15 @@
 // - Temperature follows the Shakura-Sunyaev profile T ~ r^-3/4 * (1 - k*sqrt(rin/r))^1/4.
 // - Colour is the blackbody colour of the Doppler-shifted temperature.
 // - Relativistic beaming: the side orbiting toward the camera is brighter and bluer.
-// - Gas orbits with Keplerian angular speed (omega ~ r^-3/2). Differential rotation would wind
-//   the turbulence up forever, so two flow phases are cross-faded (the flow map trick).
+// - Turbulence (Keplerian flow, see diskTurbulence.frag.glsl) comes from a polar map rendered
+//   once per frame, one channel per layer.
 
-#include lib/simplex3d.glsl
 #include lib/blackbody.glsl
 
-uniform float uTime;
 uniform float uInner;
 uniform float uOuter;
 uniform vec3 uCamLocal;
 uniform float uSpin;
-uniform float uOmegaInner;
-uniform float uFlowPeriod;
 uniform float uBeta;
 uniform float uBeamingPower;
 uniform float uTorque;
@@ -22,40 +18,18 @@ uniform float uProfilePeak;
 uniform float uPeakKelvin;
 uniform float uTempIntensityPower;
 uniform float uBrightness;
-uniform float uNoiseRadialFreq;
-uniform float uNoiseAngularFreq;
-uniform float uSpiralTwist;
 uniform float uContrast;
 uniform float uSaturation;
 uniform float uOuterSoftness;
 uniform float uLayerFalloff;
 uniform float uLayerNorm;
+// Turbulence map: u = angle, v = log radius from uTurbLogRange.x to .y; vMask picks this layer's channel.
+uniform sampler2D tTurbulence;
+uniform vec2 uTurbLogRange;
 
 varying vec3 vLocal;
 varying float vLayer;
-
-float fbm(vec3 p) {
-  float sum = 0.0;
-  float amp = 0.5;
-  for (int i = 0; i < NOISE_OCTAVES; i++) {
-    sum += amp * snoise(p);
-    p = p * 2.03 + vec3(1.7, -3.1, 0.6);
-    amp *= 0.5;
-  }
-  return sum;
-}
-
-// Turbulence sampled in polar coordinates. The angle goes through cos/sin so it wraps seamlessly;
-// radius goes through log so streak width scales with radius.
-float turbulence(float logR, float angle, float seed) {
-  float a = angle + logR * uSpiralTwist;
-  vec3 p = vec3(cos(a) * uNoiseAngularFreq, sin(a) * uNoiseAngularFreq, logR * uNoiseRadialFreq);
-  return fbm(p + vec3(seed * 7.13, seed * 3.71, seed * 1.37 + vLayer * 0.8));
-}
-
-float hash11(float n) {
-  return fract(sin(n * 127.1) * 43758.5453);
-}
+varying vec3 vMask;
 
 void main() {
   float r = length(vLocal.xy);
@@ -63,16 +37,9 @@ void main() {
   float angle = atan(vLocal.y, vLocal.x);
   float logR = log(r);
 
-  // Keplerian flow with two cross-faded phases. Each new cycle samples a fresh patch of noise.
-  float omega = uSpin * uOmegaInner * x * sqrt(x);
-  float cycle = uTime / uFlowPeriod;
-  float c0 = fract(cycle);
-  float c1 = fract(cycle + 0.5);
-  float w0 = 1.0 - abs(2.0 * c0 - 1.0);
-  float n0 = turbulence(logR, angle - omega * c0 * uFlowPeriod, hash11(floor(cycle)));
-  float n1 = turbulence(logR, angle - omega * c1 * uFlowPeriod, hash11(floor(cycle + 0.5) + 31.0));
-  // Cross-fading two noises lowers their contrast; the 1.4 restores it roughly.
-  float n = (n0 * w0 + n1 * (1.0 - w0)) * 1.4;
+  vec2 turbUv = vec2(angle * 0.15915494 + 0.5, (logR - uTurbLogRange.x) / (uTurbLogRange.y - uTurbLogRange.x));
+  // Explicit LOD: the map has no mipmaps, and the angle wraps (no derivative trouble at the seam).
+  float n = dot(textureLod(tTurbulence, turbUv, 0.0).rgb, vMask);
 
   // Temperature profile, normalised so its peak is 1.
   float temp = pow(x, 0.75) * pow(max(1.0 - uTorque * sqrt(x), 0.0), 0.25) / uProfilePeak;

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { FullScreenQuad, Pass } from 'three/examples/jsm/postprocessing/Pass.js';
-import { LENSING } from '../config';
+import { LENSING, QUALITY } from '../config';
+import type { GpuTimer } from './GpuTimer';
 import vertexShader from '../shaders/lensing.vert.glsl';
 import fragmentShader from '../shaders/lensing.frag.glsl';
 import { CORE_LAYER, OVERLAY_LAYER } from './layers';
@@ -29,6 +30,8 @@ export class LensingPass extends Pass {
   readonly centre = new THREE.Vector2(0.5, 0.5);
   /** On-screen core radius as a fraction of the screen height, as of the last frame. */
   coreRadius = 0;
+  /** Set by Renderer.enableProfiling. */
+  timer: GpuTimer | null = null;
   private readonly material: THREE.ShaderMaterial;
   private readonly quad: FullScreenQuad;
   private readonly centreView = new THREE.Vector3();
@@ -51,12 +54,12 @@ export class LensingPass extends Pass {
         uUvToLens: { value: new THREE.Vector2(1, 1) },
         uTexel: { value: new THREE.Vector2(1, 1) },
         uSampleZone: { value: 0 },
+        uLensSamples: { value: 1 },
         uTanHalfFov: { value: new THREE.Vector2(1, 1) },
         uPlaneNormal: { value: new THREE.Vector3(0, 1, 0) },
         uLensView: { value: new THREE.Vector3(0, 0, -1) },
         uPlayerRadius: { value: 1 },
       },
-      defines: { LENS_SAMPLES: 1 },
       // The quad writes the bent scene depth through gl_FragDepth.
       depthTest: true,
       depthWrite: true,
@@ -64,18 +67,16 @@ export class LensingPass extends Pass {
       blending: THREE.NoBlending,
     });
     this.quad = new FullScreenQuad(this.material);
-    this.setQuality(LENSING.quality);
+    this.setSamples(QUALITY.levels[0].lensSamples);
   }
 
-  /** Index into LENSING.samples. The lowest level turns lensing off (the disk stops bending too). */
-  setQuality(level: number): void {
-    const samples = LENSING.samples[THREE.MathUtils.clamp(Math.round(level), 0, LENSING.samples.length - 1)];
+  /**
+   * Samples per pixel near the Einstein ring (a uniform, so changing it never recompiles the shader).
+   * 0 turns lensing off; the disk stops bending too.
+   */
+  setSamples(samples: number): void {
     lensUniforms.uLensOn.value = samples > 0 ? 1 : 0;
-    const perPixel = THREE.MathUtils.clamp(samples, 1, 4);
-    if (this.material.defines.LENS_SAMPLES !== perPixel) {
-      this.material.defines.LENS_SAMPLES = perPixel;
-      this.material.needsUpdate = true;
-    }
+    this.material.uniforms.uLensSamples.value = THREE.MathUtils.clamp(Math.round(samples), 1, 4);
   }
 
   setSize(width: number, height: number): void {
@@ -91,12 +92,15 @@ export class LensingPass extends Pass {
     const autoClear = renderer.autoClear;
     renderer.autoClear = false;
     renderer.setRenderTarget(this.renderToScreen ? null : writeBuffer);
+    this.timer?.begin('lens');
     this.quad.render(renderer);
+    this.timer?.begin('hole');
 
     const mask = this.camera.layers.mask;
     this.camera.layers.set(CORE_LAYER);
     this.camera.layers.enable(OVERLAY_LAYER);
     renderer.render(this.scene, this.camera);
+    this.timer?.end();
     this.camera.layers.mask = mask;
     renderer.autoClear = autoClear;
   }

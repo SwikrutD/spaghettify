@@ -17,8 +17,10 @@ uniform float uLensOn;
 uniform vec2 uCentre;
 uniform vec2 uUvToLens;
 uniform vec2 uTexel;
-// Supersample inside this radius (player radii), where the image is squeezed hardest.
+// Supersample inside this radius (player radii), where the image is squeezed hardest, with this many
+// samples (1 to 4; a uniform so the quality level can change without a recompile).
 uniform float uSampleZone;
+uniform int uLensSamples;
 // Play plane in view space, to find how far behind the hole it is at each pixel.
 uniform vec2 uTanHalfFov;
 uniform vec3 uPlaneNormal;
@@ -89,17 +91,17 @@ void main() {
   if (uLensOn < 0.5 || r >= uLensRadius) {
     color = textureLod(tColor, vUv, 0.0).rgb;
     depth = textureLod(tDepth, vUv, 0.0).x;
+  } else if (uLensSamples > 1 && r < uSampleZone) {
+    // Supersampled. The core's depth test uses the first sample's depth (under half a texel off centre).
+    color = lensSample(vUv + SAMPLE_OFFSETS[0] * uTexel, depth);
+    float sampleDepth;
+    for (int i = 1; i < 4; i++) {
+      if (i >= uLensSamples) break;
+      color += lensSample(vUv + SAMPLE_OFFSETS[i] * uTexel, sampleDepth);
+    }
+    color /= float(uLensSamples);
   } else {
     color = lensSample(vUv, depth);
-#if LENS_SAMPLES > 1
-    if (r < uSampleZone) {
-      // Depth for the core's depth test stays from the centre sample.
-      vec3 sum = vec3(0.0);
-      float sampleDepth;
-      for (int i = 0; i < LENS_SAMPLES; i++) sum += lensSample(vUv + SAMPLE_OFFSETS[i] * uTexel, sampleDepth);
-      color = sum / float(LENS_SAMPLES);
-    }
-#endif
   }
   gl_FragColor = vec4(color, 1.0);
   gl_FragDepth = depth;

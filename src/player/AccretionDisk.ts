@@ -1,13 +1,18 @@
 import * as THREE from 'three';
-import { DISK, PHOTON_RING } from '../config';
+import { DISK, PHOTON_RING, QUALITY } from '../config';
 import { OVERLAY_LAYER } from '../render/layers';
 import { lensUniforms } from '../render/lensUniforms';
+import { FullScreenQuad } from 'three/examples/jsm/postprocessing/Pass.js';
 import diskVert from '../shaders/accretionDisk.vert.glsl';
 import diskFrag from '../shaders/accretionDisk.frag.glsl';
+import fullscreenVert from '../shaders/fullscreen.vert.glsl';
+import turbulenceFrag from '../shaders/diskTurbulence.frag.glsl';
 import ringVert from '../shaders/photonRing.vert.glsl';
 import ringFrag from '../shaders/photonRing.frag.glsl';
 
 const tmpColor = new THREE.Color();
+/** Loop bound for the disk's noise octaves (the live count is a uniform). */
+const MAX_OCTAVES = 3;
 
 /** Number uniform; widens `as const` config literals to number. */
 const num = (value: number): { value: number } => ({ value });
@@ -26,19 +31,58 @@ export class AccretionDisk {
   /** 0..1 hunger level; dims the disk and ring (Hawking evaporation). */
   starvation = 0;
   private time = 0;
+  private layers: number = QUALITY.levels[0].diskLayers;
+  private readonly disk: THREE.Mesh;
   private readonly diskUniforms;
   private readonly ringUniforms;
+  /** Turbulence polar map (one channel per layer), rendered once per frame by prepare(). */
+  private readonly turbUniforms;
+  private readonly turbTarget: THREE.WebGLRenderTarget;
+  private readonly turbQuad: FullScreenQuad;
 
   constructor() {
-    this.diskUniforms = {
+    const logRange = new THREE.Vector2(Math.log(DISK.innerRadius), Math.log(DISK.outerRadiusMax));
+    this.turbTarget = new THREE.WebGLRenderTarget(DISK.turbulenceWidth, DISK.turbulenceHeight, {
+      type: THREE.HalfFloatType,
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      wrapS: THREE.RepeatWrapping,
+      wrapT: THREE.ClampToEdgeWrapping,
+      depthBuffer: false,
+      generateMipmaps: false,
+    });
+    this.turbUniforms = {
       uTime: num(0),
+      uInner: num(DISK.innerRadius),
+      uSpin: num(DISK.spin),
+      uOmegaInner: num(DISK.innerAngularSpeed),
+      uFlowPeriod: num(DISK.flowPeriod),
+      uNoiseRadialFreq: num(DISK.noiseRadialFreq),
+      uNoiseAngularFreq: num(DISK.noiseAngularFreq),
+      uSpiralTwist: num(DISK.spiralTwist),
+      uLogRange: { value: logRange },
+      uOctaves: num(QUALITY.levels[0].diskOctaves),
+      uLayers: num(this.layers),
+      uLayerHeights: { value: layerHeights(this.layers) },
+    };
+    this.turbQuad = new FullScreenQuad(
+      new THREE.ShaderMaterial({
+        vertexShader: fullscreenVert,
+        fragmentShader: turbulenceFrag,
+        uniforms: this.turbUniforms,
+        defines: { MAX_OCTAVES },
+        depthTest: false,
+        depthWrite: false,
+        blending: THREE.NoBlending,
+      }),
+    );
+
+    this.diskUniforms = {
       uInner: num(DISK.innerRadius),
       uOuter: num(DISK.outerRadiusMin),
       uThickness: num(DISK.thicknessMin),
       uCamLocal: { value: new THREE.Vector3(0, -10, 10) },
       uSpin: num(DISK.spin),
-      uOmegaInner: num(DISK.innerAngularSpeed),
-      uFlowPeriod: num(DISK.flowPeriod),
       uBeta: num(DISK.dopplerBeta),
       uBeamingPower: num(DISK.beamingPower),
       uTorque: num(DISK.innerTorque),
@@ -46,24 +90,22 @@ export class AccretionDisk {
       uPeakKelvin: num(DISK.peakKelvinMin),
       uTempIntensityPower: num(DISK.tempIntensityPower),
       uBrightness: num(DISK.brightnessMin),
-      uNoiseRadialFreq: num(DISK.noiseRadialFreq),
-      uNoiseAngularFreq: num(DISK.noiseAngularFreq),
-      uSpiralTwist: num(DISK.spiralTwist),
       uContrast: num(DISK.contrast),
       uSaturation: num(DISK.colorSaturation),
       uOuterSoftness: num(DISK.outerSoftness),
       uLayerFalloff: num(DISK.layerFalloff),
-      uLayerNorm: num(layerNorm(DISK.layers, DISK.layerFalloff)),
+      uLayerNorm: num(layerNorm(this.layers, DISK.layerFalloff)),
+      tTurbulence: { value: this.turbTarget.texture },
+      uTurbLogRange: { value: logRange },
       // The disk is drawn over the lensed image and bends itself (see lensVertex.glsl).
       ...lensUniforms,
     };
     const disk = new THREE.Mesh(
-      createLayeredRing(DISK.layers),
+      createLayeredRing(this.layers),
       new THREE.ShaderMaterial({
         vertexShader: diskVert,
         fragmentShader: diskFrag,
         uniforms: this.diskUniforms,
-        defines: { NOISE_OCTAVES: DISK.noiseOctaves },
         transparent: true,
         depthWrite: false,
         blending: THREE.AdditiveBlending,
@@ -106,8 +148,39 @@ export class AccretionDisk {
     disk.layers.set(OVERLAY_LAYER);
     ring.layers.set(OVERLAY_LAYER);
 
+    this.disk = disk;
     this.group.add(disk, ring);
     this.applyHeat();
+  }
+
+  /** Quality level: stacked layers (1 to 3, each costs one disk of fill rate) and noise octaves (1 to MAX_OCTAVES). */
+  setDetail(layers: number, octaves: number): void {
+    this.turbUniforms.uOctaves.value = THREE.MathUtils.clamp(Math.round(octaves), 1, MAX_OCTAVES);
+    layers = THREE.MathUtils.clamp(Math.round(layers), 1, 3);
+    if (layers === this.layers) return;
+    this.layers = layers;
+    this.disk.geometry.dispose();
+    this.disk.geometry = createLayeredRing(layers);
+    this.diskUniforms.uLayerNorm.value = layerNorm(layers, DISK.layerFalloff);
+    this.turbUniforms.uLayers.value = layers;
+    this.turbUniforms.uLayerHeights.value = layerHeights(layers);
+  }
+
+  /** Size the turbulence map for a render this many pixels high (the disk's size on screen follows the height). */
+  setRenderHeight(pixels: number): void {
+    const scale = Math.min(1, pixels / DISK.turbulenceRefHeight);
+    const width = Math.max(DISK.turbulenceMinWidth, Math.round(DISK.turbulenceWidth * scale));
+    const height = Math.round((width * DISK.turbulenceHeight) / DISK.turbulenceWidth);
+    if (width !== this.turbTarget.width || height !== this.turbTarget.height) this.turbTarget.setSize(width, height);
+  }
+
+  /** Render this frame's turbulence map. Call before the scene is rendered. */
+  prepare(renderer: THREE.WebGLRenderer): void {
+    this.turbUniforms.uTime.value = this.time;
+    const target = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.turbTarget);
+    this.turbQuad.render(renderer);
+    renderer.setRenderTarget(target);
   }
 
   /** Record a meal. `massFraction` is the gained mass divided by the player's mass after eating. */
@@ -142,7 +215,6 @@ export class AccretionDisk {
     const h = this.heat;
     const lerp = THREE.MathUtils.lerp;
     const u = this.diskUniforms;
-    u.uTime.value = this.time;
     u.uOuter.value = lerp(DISK.outerRadiusMin, DISK.outerRadiusMax, h);
     u.uThickness.value = lerp(DISK.thicknessMin, DISK.thicknessMax, h);
     u.uPeakKelvin.value = lerp(DISK.peakKelvinMin, DISK.peakKelvinMax, h);
@@ -154,11 +226,24 @@ export class AccretionDisk {
   }
 }
 
+/**
+ * Height of layer l of `layers` in -1..1. Three layers sit at -1, 0, 1; fewer layers stay nearer the
+ * midplane (two at -0.5 and 0.5, one at 0) so a lower quality level keeps the same overall look.
+ */
+function layerHeight(l: number, layers: number): number {
+  return layers === 1 ? 0 : ((l / (layers - 1)) * 2 - 1) * Math.min(1, (layers - 1) / 2);
+}
+
+/** Heights of up to three layers, one per turbulence map channel. */
+function layerHeights(layers: number): THREE.Vector3 {
+  return new THREE.Vector3(layerHeight(0, layers), layerHeight(1, layers), layerHeight(2, layers));
+}
+
 /** 1 / sum of layer weights, so the layer count changes volume but not total brightness. */
 function layerNorm(layers: number, falloff: number): number {
   let sum = 0;
   for (let l = 0; l < layers; l++) {
-    const layer = layers === 1 ? 0 : (l / (layers - 1)) * 2 - 1;
+    const layer = layerHeight(l, layers);
     sum += Math.exp(-falloff * layer * layer);
   }
   return 1 / sum;
@@ -194,7 +279,7 @@ function blackbodyColor(kelvin: number, out: THREE.Color): THREE.Color {
   return out.setRGB(lin(r), lin(g), lin(b));
 }
 
-/** Ring from radius 1 to 2 in XY, stacked `layers` times with an aLayer attribute in -1..1. */
+/** Ring from radius 1 to 2 in XY, stacked `layers` times with an aLayer height in -1..1 and the layer index as aChannel. */
 function createLayeredRing(layers: number): THREE.BufferGeometry {
   const base = new THREE.RingGeometry(1, 2, DISK.thetaSegments, DISK.radialSegments);
   const basePos = base.getAttribute('position');
@@ -203,17 +288,20 @@ function createLayeredRing(layers: number): THREE.BufferGeometry {
   const vCount = basePos.count;
   const positions = new Float32Array(vCount * 3 * layers);
   const layerAttr = new Float32Array(vCount * layers);
+  const channelAttr = new Float32Array(vCount * layers);
   const indices: number[] = [];
   for (let l = 0; l < layers; l++) {
-    const layer = layers === 1 ? 0 : (l / (layers - 1)) * 2 - 1;
+    const layer = layerHeight(l, layers);
     positions.set(basePos.array as Float32Array, l * vCount * 3);
     layerAttr.fill(layer, l * vCount, (l + 1) * vCount);
+    channelAttr.fill(l, l * vCount, (l + 1) * vCount);
     for (let i = 0; i < baseIndex.count; i++) indices.push(baseIndex.getX(i) + l * vCount);
   }
   base.dispose();
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   geo.setAttribute('aLayer', new THREE.BufferAttribute(layerAttr, 1));
+  geo.setAttribute('aChannel', new THREE.BufferAttribute(channelAttr, 1));
   geo.setIndex(indices);
   return geo;
 }

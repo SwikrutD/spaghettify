@@ -3,7 +3,9 @@ import { test, expect, type Page } from '@playwright/test';
 interface Debug {
   frames: number;
   mode: string;
-  settings: { scheme: string; quality: number };
+  settings: { scheme: string; quality: string };
+  qualityLevel: number;
+  autoQuality: { level: number; locked: boolean; isEnabled: boolean; frame(ms: number): void };
   player: {
     position: { x: number; y: number; z: number };
     radius: number;
@@ -47,7 +49,8 @@ interface Debug {
     gainFor(bus: 'music' | 'sfx'): number;
   };
   renderer: {
-    lensing: { centre: { x: number; y: number }; coreRadius: number; setQuality(level: number): void };
+    lensing: { centre: { x: number; y: number }; coreRadius: number; setSamples(samples: number): void };
+    pixelRatio: number;
   };
   readPixel(x: number, y: number): Promise<number[]>;
 }
@@ -56,6 +59,19 @@ declare global {
     __spaghettify: Debug;
   }
 }
+
+// SwiftShader is far too slow for the auto quality scaler, which would drop to the lowest level
+// mid-test. Every test starts at the fixed High preset unless it stores its own choice first; the
+// auto quality test clears this.
+test.beforeEach(async ({ page }) => {
+  await page.addInitScript(() => {
+    try {
+      if (!localStorage.getItem('spaghettify.settings')) localStorage.setItem('spaghettify.settings', JSON.stringify({ quality: 'high' }));
+    } catch {
+      // Storage blocked (one test does this on purpose).
+    }
+  });
+});
 
 /** The title screen holds the run until Play is pressed. */
 async function startRun(page: Page, realClick = false): Promise<void> {
@@ -169,11 +185,11 @@ test('lensing bends the disk around the hole and the core stays black', async ({
 
   // Brightness at the core's centre and just outside the shadow on the far side (above it on
   // screen) and the near side (below), in core radii. Prey are moved away so they cannot cover the probes.
-  const probe = (quality: number) =>
-    page.evaluate(async (quality) => {
+  const probe = (samples: number) =>
+    page.evaluate(async (samples) => {
       const d = window.__spaghettify;
       for (const o of d.prey.objects) o.position.x += 1000;
-      d.renderer.lensing.setQuality(quality);
+      d.renderer.lensing.setSamples(samples);
       const start = d.frames;
       while (d.frames < start + 3) await new Promise(requestAnimationFrame);
       const { centre, coreRadius } = d.renderer.lensing;
@@ -189,10 +205,10 @@ test('lensing bends the disk around the hole and the core stays black', async ({
         far: Math.min(await lum(0, -1.3), await lum(-0.1, -1.3), await lum(0.1, -1.3)),
         near: Math.max(await lum(0, 1.3), await lum(-0.1, 1.3), await lum(0.1, 1.3)),
       };
-    }, quality);
+    }, samples);
 
   const flat = await probe(0);
-  const lensed = await probe(2);
+  const lensed = await probe(4);
   // The core is drawn after lensing and bloom: pure black either way.
   expect(flat.core).toBeLessThan(3);
   expect(lensed.core).toBeLessThan(3);
@@ -419,7 +435,7 @@ test('speed holds on screen as the hole grows', async ({ page }) => {
     page.evaluate(async (mass) => {
       const d = window.__spaghettify;
       const { player } = d;
-      d.renderer.lensing.setQuality(0);
+      d.renderer.lensing.setSamples(0);
       player.mass = mass;
       let top = 0;
       for (let i = 0; i < 160; i++) {
@@ -624,13 +640,21 @@ test('audio: tier-up, hunger warning and evaporation each trigger their sound; r
   });
   await page.waitForFunction(() => (window.__spaghettify.audio.played.tierUp ?? 0) > 0);
 
-  // Hunger: the warning pulses, then the evaporation sound plays once.
+  // Hunger: the warning pulses, then the evaporation sound plays once. The hole is held still and the
+  // prey moved far away, or it can keep eating the refilled tier's prey and never starve.
+  await page.mouse.move(240, 160);
   await page.evaluate(() => {
-    const { hunger } = window.__spaghettify;
+    const { hunger, prey } = window.__spaghettify;
+    for (const o of prey.objects) o.position.x += 1000;
     hunger.enabled = true;
     hunger.idle = 100;
   });
   await page.waitForFunction(() => (window.__spaghettify.audio.played.warning ?? 0) > 0);
+  // Skip most of the drain: on slow SwiftShader frames (game time is capped per frame) it can take minutes.
+  await page.evaluate(() => {
+    const { player, hunger } = window.__spaghettify;
+    player.mass = hunger.floorMass * 1.03;
+  });
   await page.waitForFunction(() => window.__spaghettify.hunger.phase !== 'playing', undefined, { timeout: 30_000 });
   await page.evaluate(() => {
     const { player, hunger } = window.__spaghettify;
@@ -793,20 +817,21 @@ test('settings: scheme, quality and volume persist across a reload and keyboard 
   await page.getByTestId('title-settings').click();
   await expect(page.getByTestId('settings-panel')).toBeVisible();
   await page.getByTestId('control-scheme').selectOption('keyboard');
-  await page.getByTestId('quality').selectOption('0');
+  await page.getByTestId('quality').selectOption('low');
   await page.getByTestId('music-volume').fill('0.25');
   await page.getByTestId('sfx-volume').fill('0.5');
   await page.getByTestId('settings-back').click();
   await expect(page.getByTestId('title-screen')).toBeVisible();
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}'))).toEqual({ scheme: 'keyboard', quality: 0 });
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}'))).toEqual({ scheme: 'keyboard', quality: 'low' });
 
   // Persisted values are applied after a reload and shown in the panel.
   await page.reload();
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
-  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'keyboard', quality: 0 });
+  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'keyboard', quality: 'low' });
+  expect(await page.evaluate(() => window.__spaghettify.qualityLevel)).toBe(6);
   await page.getByTestId('title-settings').click();
   await expect(page.getByTestId('control-scheme')).toHaveValue('keyboard');
-  await expect(page.getByTestId('quality')).toHaveValue('0');
+  await expect(page.getByTestId('quality')).toHaveValue('low');
   await expect(page.getByTestId('music-volume')).toHaveValue('0.25');
   await expect(page.getByTestId('sfx-volume')).toHaveValue('0.5');
   await page.getByTestId('settings-back').click();
@@ -824,8 +849,75 @@ test('settings: scheme, quality and volume persist across a reload and keyboard 
   await page.keyboard.press('Escape');
   await page.getByTestId('pause-settings').click();
   await page.getByTestId('control-scheme').selectOption('mouse');
-  await page.getByTestId('quality').selectOption('2');
-  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'mouse', quality: 2 });
+  await page.getByTestId('quality').selectOption('high');
+  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'mouse', quality: 'high' });
+  expect(await page.evaluate(() => window.__spaghettify.qualityLevel)).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+test('auto quality: default on, steps down on slow frames, probes up once, locks when it does not help, and a fixed preset stops it', async ({ page }) => {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+  await page.setViewportSize({ width: 480, height: 270 });
+  // Undo the High preset that beforeEach seeds: this test wants the real default.
+  await page.addInitScript(() => localStorage.removeItem('spaghettify.settings'));
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 2);
+
+  // Each scenario feeds synthetic frame times in one synchronous call, so real (slow SwiftShader)
+  // frames cannot interleave. 30 ms frames are 33 fps; 12 ms frames are comfortably good.
+  const feed = (steps: [number, number][]) =>
+    page.evaluate((steps) => {
+      const d = window.__spaghettify;
+      for (const [ms, count] of steps) for (let i = 0; i < count; i++) d.autoQuality.frame(ms);
+      return { level: d.autoQuality.level, applied: d.qualityLevel, locked: d.autoQuality.locked, pr: d.renderer.pixelRatio };
+    }, steps);
+
+  expect(await page.evaluate(() => window.__spaghettify.settings.quality)).toBe('auto');
+  expect(await page.evaluate(() => window.__spaghettify.autoQuality.isEnabled)).toBe(true);
+
+  // A steady 30 fps cap: stepping down does not help, so the scaler undoes it and stops for the session.
+  const start = await page.evaluate(() => window.__spaghettify.autoQuality.level);
+  const capped = await feed([[33.3, 1000]]);
+  expect(capped.locked).toBe(true);
+  expect(capped.level).toBe(start);
+
+  // Fresh session (from the remembered level, desktop default 0): slow frames step down one level and apply it.
+  await page.reload();
+  await page.waitForFunction(() => window.__spaghettify?.frames > 2);
+  expect(await page.evaluate(() => window.__spaghettify.autoQuality.level)).toBe(0);
+  const slow = await feed([[30, 110]]);
+  expect(slow).toMatchObject({ level: 1, applied: 1, locked: false });
+  expect(slow.pr).toBeCloseTo(0.85, 5);
+  expect(await page.evaluate(() => localStorage.getItem('spaghettify.autoQuality'))).toBe('1');
+  // Good frames for a while: one probe back up to level 0.
+  expect((await feed([[12, 1300]])).level).toBe(0);
+  // Level 0 is too slow after all: back down, and level 0 is not retried this session.
+  expect((await feed([[30, 110]])).level).toBe(1);
+  expect((await feed([[12, 4000]])).level).toBe(1);
+
+  // A fixed preset turns the scaler off and applies its own level; Auto turns it back on.
+  await page.getByTestId('title-settings').click();
+  await expect(page.getByTestId('quality')).toHaveValue('auto');
+  await page.getByTestId('quality').selectOption('high');
+  const fixed = await feed([[30, 400]]);
+  expect(fixed.applied).toBe(0);
+  expect(fixed.pr).toBeCloseTo(1, 5);
+  expect(await page.evaluate(() => window.__spaghettify.autoQuality.isEnabled)).toBe(false);
+  await page.getByTestId('quality').selectOption('auto');
+  expect(await page.evaluate(() => window.__spaghettify.autoQuality.isEnabled)).toBe(true);
+  expect(await page.evaluate(() => window.__spaghettify.qualityLevel)).toBe(1);
+  await page.getByTestId('settings-back').click();
+  await startRun(page);
+  await page.waitForTimeout(300);
+
+  // `?perf` shows the frame time readout (the GPU timer is not available under SwiftShader).
+  await page.goto('/?perf');
+  await expect(page.getByTestId('perf-overlay')).toContainText('fps');
+  await expect(page.getByTestId('perf-overlay')).toContainText('quality');
   expect(errors).toEqual([]);
 });
 

@@ -1,6 +1,7 @@
 /** All tunable numbers live here. Game logic must not hard-code these. */
 
 export * from './tiers';
+export * from './quality';
 
 export const PLAYER = {
   /** Starting radius in world units ("pea-sized"). */
@@ -200,8 +201,7 @@ export const DISK = {
   /** Half-thickness at the outer edge in player radii at heat 0 and 1. The disk flares from zero at the inner edge. */
   thicknessMin: 0.06,
   thicknessMax: 0.2,
-  /** Stacked layers that give the disk volume. Each costs one full disk of fill rate. */
-  layers: 3,
+  /** Stacked layers that give the disk volume (count and noise octaves per quality level are in QUALITY). */
   /** Brightness falloff across layers: weight = exp(-layerFalloff * layer^2), layer in -1..1. */
   layerFalloff: 1.6,
   thetaSegments: 160,
@@ -233,7 +233,16 @@ export const DISK = {
   noiseAngularFreq: 1.6,
   spiralTwist: 1.2,
   contrast: 1.0,
-  noiseOctaves: 3,
+  /**
+   * The turbulence is rendered once per frame into a polar map (angle by log radius) that the disk
+   * samples, so its cost does not grow with screen resolution. Map size in texels at a render height
+   * of turbulenceRefHeight pixels or more; smaller renders get a proportionally smaller map (the disk
+   * covers fewer pixels), down to turbulenceMinWidth wide.
+   */
+  turbulenceWidth: 384,
+  turbulenceHeight: 144,
+  turbulenceRefHeight: 1080,
+  turbulenceMinWidth: 96,
   /** Fraction of the disk width over which the outer edge fades. */
   outerSoftness: 0.55,
   /**
@@ -287,11 +296,7 @@ export const LENSING = {
   falloff: 1,
   /** Lens reach in player radii. The bending fades smoothly to zero here so the lens has a finite footprint. */
   radius: 18,
-  /** Detail level, an index into samples. M8 lowers it on slow devices. */
-  quality: 2,
-  /** Samples per pixel near the ring, where the image is squeezed hardest, per quality level. 0 = lensing off. */
-  samples: [0, 1, 4],
-  /** Supersampled zone radius as a multiple of einsteinRadius. */
+  /** Supersampled zone radius as a multiple of einsteinRadius (samples per pixel come from QUALITY). */
   sampleZone: 1.3,
 } as const;
 
@@ -422,12 +427,12 @@ export const STORAGE = {
   best: 'spaghettify.best',
   nickname: 'spaghettify.nickname',
   settings: 'spaghettify.settings',
+  /** Level the auto quality scaler settled on, so the next visit starts there. */
+  autoQuality: 'spaghettify.autoQuality',
 } as const;
 
 export const MENU = {
   nicknameMaxLength: 16,
-  /** Display names for the quality levels, indexed like LENSING.samples. */
-  qualityNames: ['Low', 'Medium', 'High'],
   defaultScheme: 'mouse',
   /** Scheme picked on a touch-first device when nothing is stored yet. */
   defaultTouchScheme: 'finger',

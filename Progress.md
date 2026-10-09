@@ -1,15 +1,15 @@
 # Progress - Spaghettify
 
 ## Next session
-M8 performance pass: object pooling and entity budgets check, draw calls, shader cost (disk layers and noise octaves per quality level, lens cost), auto quality scaling on bad frame time (render resolution first, then bloom, then lensing detail), and a real phone test. Recommended: Opus 5.5, high (performance work, per the milestone list). The user should also playtest M7 on a phone first: touch feel (`INPUT.touchFullSpeedRadius`, `joystickRadius`) and juice (`JUICE`) are untuned by hand.
-How to start: `/clear`, then `/model` (Opus 5.5, high), then paste the start prompt below.
+M9 deploy: Dockerfile + docker-compose.yml, TrueNAS Docker app, Cloudflare DNS for a swikrut.com subdomain, Umami analytics. Recommended: Sonnet 5.5, medium (deploy work, per the milestone list). Before that, the user should open the game on a phone with `?perf` (see M8 below) and report the fps and the quality level it settles on; if it settles at level 4 or lower, a short follow-up perf session (Opus 5.5, high) should come before M9.
+How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste the start prompt below.
 
 ```
-Start Milestone 8 (performance pass) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 9 (Docker + TrueNAS deploy + Cloudflare subdomain + Umami) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: hit 60 fps on a mid-range laptop and a recent phone. Profile frame time (render passes, disk fill cost, lens, prey instancing), add per-quality-level reductions (DISK.layers and noiseOctaves, bloom, render resolution) and automatic quality scaling when frame time is bad (resolution first, then bloom, then lensing detail), confirm pooling and entity budgets, and keep the Settings quality select working with the auto scaler. Known concern: the disk shader is 3 layers x 2 flow phases x 3 octaves per pixel and is unverified on a phone.
+Goal: the game is served from the user's TrueNAS server as a Docker app on a swikrut.com subdomain (DNS in Cloudflare) with Umami analytics like Rex Chase. There is no backend yet, so the container serves the Vite production build (npm run build) with sensible caching (hashed assets long-lived, index.html not cached) and gzip or brotli. Add a Dockerfile and docker-compose.yml at the repo root, document the TrueNAS and Cloudflare steps the user must do by hand, and add the Umami script tag with the site id left as a clearly marked value for the user to fill in. Ask before anything outward-facing.
 
-Done when: tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test), numbers before and after are recorded in Progress.md, and the work is committed. Update Progress.md at the end.
+Done when: npm run build works, the container builds and serves the game locally, tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test), Progress.md is updated and the work is committed. Note: M8 added `?perf` (frame time readout) and the auto quality scaler; the production build must keep both working.
 ```
 
 ## Milestones
@@ -23,7 +23,7 @@ Suggested model/effort in brackets.
 - [x] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest)
 - [x] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest; part 1 audio, part 2 menus, part 3 touch, gamepad and juice)
-- [ ] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high]
+- [x] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high] (2026-10-09, awaiting a real phone test with `?perf`)
 - [ ] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium]
 - [ ] Post-MVP: more tiers, daily seed, leaderboard, multiplayer
 
@@ -62,7 +62,7 @@ Suggested model/effort in brackets.
   - Scene alpha is the layer mask: clear alpha 0, prey write 1, the starfield uses CustomBlending so it never writes alpha. Filtered alpha also stops bilinear background samples from picking up prey edges.
   - The disk bends itself in its vertex shader (`src/shaders/lib/lensVertex.glsl`, forward map with Newton steps) with the same lens (`lib/lens.glsl`, shared uniforms in `src/render/lensUniforms.ts`). Result: the near side hugs the core, the far side lifts and opens a dark crescent above it.
   - `src/render/layers.ts` holds `CORE_LAYER` (1) and `OVERLAY_LAYER` (2). The core is no longer on layer 0.
-  - Quality: `lensing.setQuality(level)` indexes `LENSING.samples` (0 off, 1 tap, 4 taps inside `sampleZone` x E). Off also stops the disk bending.
+  - Quality: `lensing.setSamples(n)` (0 off, 1 tap, up to 4 taps inside `sampleZone` x E; set per quality level since M8). Off also stops the disk bending.
   - `STARFIELD.count` 2500 to 9000 so the lens has enough stars to visibly bend.
   - Smoke test 3: core pixel black with the lens on and off, far side of the disk dark only when lensed, near side bright in both, still clean after a resize. Uses `__spaghettify.readPixel` (reads the frame right after it renders) and `renderer.lensing`.
   - Judged by screenshot (SwiftShader): arcs and dashes around the hole, a full Einstein ring when a star sits behind it, prey behind the hole lifted, big prey in front still cover the core. Perf (GTX 1070 Ti, 3840x2160 render): whole frame about 2.4 ms at quality 0 or 1, 2.6 ms at quality 2. No D3D shader warnings.
@@ -123,6 +123,20 @@ Suggested model/effort in brackets.
   - Smoke tests (17 pass): touch device (emulated mobile context) defaults to finger, taps Play and the pause button, finger steers and lifting stops input; joystick does not move on touch-down alone, shows the stick, steers right and up by drag, persists across reload; gamepad stick right and up (stubbed `navigator.getGamepads`); big meal shakes, tiny one does not. Debug handle gained `touch` and `input`.
   - Not judged by a human: touch feel, stick size, shake and kick strength, whether the keyboard and gamepad sources are accidentally hit on a phone (they are idle, so no).
 
+- 2026-10-09 M8: performance pass (awaiting a real phone test).
+  - Profiling: `src/render/GpuTimer.ts` (EXT_disjoint_timer_query_webgl2, GPU ms per section); `Renderer.enableProfiling()` times scene, lens, hole (core, disk and ring drawn over the lens), noise, bloom, core and output. `npm run perf` (`perf/frame-time.spec.ts`, `perf/playwright.perf.config.ts`) uses the real GPU (ANGLE D3D11, vsync and frame cap off) on three viewports and prints GPU ms per pass, CPU ms, uncapped fps and draw calls per variant and quality level. `?perf` in the URL shows a live readout (`src/ui/PerfOverlay.ts`: fps, worst frame, CPU ms, render size, quality level, GPU per pass where the browser has the timer; most phones do not). Debug handle: `cpuMs`, `autoQuality`, `qualityLevel`, `forceQuality(i)`.
+  - Disk: the turbulence (2 flow phases x 3 octaves per layer) moved out of the disk fragment shader into a polar map (angle by log radius, one channel per layer, half float) rendered once per frame (`src/shaders/diskTurbulence.frag.glsl`, `AccretionDisk.prepare`, called through `Renderer.onBeforeRender`). The disk samples it, so the noise cost no longer grows with resolution. Map 384x144 at a render height of 1080 or more, smaller below (`DISK.turbulence*`). The faint outer layers skip the finest octave. Stills before and after are indistinguishable at 2.5x zoom.
+  - Quality ladder `src/config/quality.ts` (`QUALITY.levels`, 7 rungs, best first): resolution 1 > 0.85 > 0.7, then half-size bloom, then 1 lens sample with 2 disk layers and 2 octaves, then resolution 0.6 with bloom off, then resolution 0.5 with lensing off and 1 disk layer. Lens samples and disk octaves are uniforms now (no recompiles on change); disk layers rebuild the geometry; bloom is a `ScaledBloomPass` (buffers at a fraction of size) and CorePass turns off with bloom. `LENSING.quality/samples`, `DISK.layers/noiseOctaves` and `MENU.qualityNames` are gone.
+  - Auto scaler `src/render/AutoQuality.ts` (`QUALITY.auto`): 2 s windows of frame time, 1 s settle after start and after each change, hitches over 250 ms ignored. A window above 20 ms steps down one level. 12 s of windows under 17.5 ms probes one level up; a slow window within 20 s of a probe marks that level failed for the session. If two steps down in a row cut frame time by less than 5 percent (30 fps cap, CPU bound) it undoes them and locks for the session. The level is remembered in `spaghettify.autoQuality`; a first visit starts at 0 on desktop and 2 on touch-first devices.
+  - Settings quality select: Auto (default), High (level 0), Medium (4), Low (6). Stored as a string in `spaghettify.settings`; old numeric values migrate (0 low, 1 medium, 2 high). A fixed preset turns the scaler off.
+  - Pooling and budgets confirmed: prey are one InstancedMesh over a fixed pool of 80 (live count 80, 70, 60 per tier), no per-frame allocations in game code, starfield fixed at 9000 points. Draw calls: 22 per frame at High, 8 with bloom off.
+  - Numbers (GTX 1070 Ti, GPU ms per frame at High with a fully fed disk, before > after):
+    - laptop 1280x720 @1: 0.38 > 0.38 (disk 0.12 > 0.04 plus 0.04 noise; 720p was never the problem)
+    - desktop 3840x2160: 2.04 > 1.47 (disk 0.67 > 0.16)
+    - phone 824x1830 (412x915 @2.625, pixel ratio capped at 2): 0.96 > 0.54 (disk 0.51 > 0.12). Level 2 (touch start) 0.34, level 4 0.26, level 6 0.13.
+    - A mid-range phone GPU is very roughly 1/8 to 1/15 of this card for this kind of shader, so High should land around 4 to 8 ms on a phone with plenty of room below it. Not verified on a real phone.
+  - Tests: new auto quality test (default Auto, step down, probe up once, failed level not retried, a 30 fps cap locks and reverts, a preset stops it, `?perf` readout). `beforeEach` seeds the High preset so SwiftShader slowness cannot make the scaler change level mid-test. Fixed a flaky audio test that also failed before M8 (the hole kept eating refilled tier 2 prey and never starved). 18 tests pass.
+
 ## In progress
 (nothing)
 
@@ -161,6 +175,10 @@ Suggested model/effort in brackets.
 - 2026-10-09: Menus are plain DOM overlays driven by a three-state `mode` in main.ts instead of a state machine class; the scene keeps rendering when not playing so resize, screenshots and tests keep working. Control scheme setting disables the mouse source rather than the keyboard (keys stay as a fallback in mouse mode).
 - 2026-10-09: Hunger runs on game time (so it pauses in tier-up slow motion); the final evaporation runs on real time.
 
+- 2026-10-09: Disk turbulence is cached in a per-frame polar map instead of evaluated per disk fragment: it depends only on angle, radius, layer and time, and the disk was half the phone frame. Same function, sampled, so the look is unchanged.
+- 2026-10-09: One quality ladder serves both the auto scaler and the Settings presets. Auto is the default; a manual preset is a fixed choice the scaler never overrides. The scaler steps up only after a long good stretch, never retries a level that failed, and gives up (reverting) when lower quality does not speed frames up, so a 30 fps cap or a CPU-bound device does not end up blurry for nothing.
+- 2026-10-09: Touch-first devices start at level 2 (0.7 resolution) on a first visit so the first seconds do not stutter while the scaler measures; the settled level is remembered for the next visit.
+
 ## Known bugs
 - Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
 - Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score. The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
@@ -169,7 +187,7 @@ Suggested model/effort in brackets.
 - Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.
 - Spaghetti: a stream behind the hole is lifted by the lens and wraps along the shadow edge instead of visibly entering the core. Looks like a photon-ring wrap; judge in playtest.
 - Spaghetti: the 6x stretched rock shows its low-poly facets (mesh detail 2). Fine with the flat-shaded look; raise `PREY.meshDetail` if it reads badly.
-- Lens: the squeezed zone inside the Einstein ring (under the disk and in the crescent above the core) can twinkle while moving. Quality 2 supersamples it with 4 taps; add taps or a low-res fallback if the playtest shows shimmer.
+- Lens: the squeezed zone inside the Einstein ring (under the disk and in the crescent above the core) can twinkle while moving. Quality levels 0 to 3 supersample it with 4 taps; add taps or a low-res fallback if the playtest shows shimmer.
 - Lens: near a prey close to the hole, stars bent with the plane strength sit next to stars bent with the full strength, so star positions jump slightly there. Not noticeable in screenshots.
 - Lens: a star exactly behind the hole makes an Einstein ring with faint beads (magnified texels of a small star sprite). Rare and brief.
 - Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. The M4 infall now starts from there, so it reads as being pulled in; judge in playtest.
@@ -178,12 +196,14 @@ Suggested model/effort in brackets.
 - Tiers: thresholds (mass 9 and 400), counts (80, 70, 60) and class weights are set from numbers and stills only. The early game may be sparse or a tier too short or long; tune `TIERS` after a playtest.
 - Tests: SwiftShader runs about 3 to 5 fps at 1280x720 with the lens on, so the tier and speed tests use a small viewport. For real performance numbers or screenshots, a scratch spec with `launchOptions.args: ['--use-angle=d3d11', '--ignore-gpu-blocklist']` uses the GPU.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
-- Disk fill cost: 3 layers x 2 flow phases x 3 noise octaves per pixel. Fine on desktop; unverified on a phone. M8 can drop `DISK.layers` or `noiseOctaves` per quality level.
+- Perf: not tested on a real phone. Open the game with `?perf` on a phone and note the fps and the quality level it settles on after half a minute. Phones rarely expose the GPU timer, so the readout shows frame time only.
+- Perf: half-size bloom (levels 3 to 5) loses most of the soft glow around the photon ring and the inner disk edge; judge by eye. Bloom is now the biggest single pass at High on a portrait phone screen (0.2 of 0.54 ms here).
+- Camera: on a portrait phone the vertical FOV is fixed, so the view is very narrow and the fed disk spans nearly the whole screen width. Gameplay issue for the phone playtest (consider a horizontal FOV floor in `GameCamera.resize`).
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 
 ## Open questions
 - Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.
 - Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. Pause now freezes hunger.
 - Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
-- Not yet playtested on a phone (touch input exists since M7 part 3). Lens cost on a phone unknown; drop it to quality 1 first.
+- Not yet playtested on a phone (touch input exists since M7 part 3). The auto scaler handles render cost; check with `?perf`.
 - Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?

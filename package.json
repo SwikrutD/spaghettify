@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "test": "playwright test"
+    "test": "playwright test",
+    "perf": "playwright test -c perf/playwright.perf.config.ts"
   },
   "dependencies": {
     "three": "^0.186.1"
