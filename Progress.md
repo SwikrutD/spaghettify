@@ -1,17 +1,17 @@
 # Progress - Spaghettify
 
 ## Next session
-Before it, the user does the manual M9 steps in `deploy/DEPLOY.md` if not done yet (Umami website id, subdomain, TrueNAS, Cloudflare), plays a run on a phone and taps SHARE on the score screen to check the native share sheet and the card.
+Before it, the user deploys both images (`deploy/DEPLOY.md`, now two containers plus a leaderboard dataset), fills in the Umami website id, and playtests the live site on a desktop and a phone (`?perf`, SHARE, the leaderboard with a nickname). Feed any playtest notes into the next session's prompt.
 
-Then M11 Global leaderboard [Sonnet 5.5, high]: Fastify + SQLite server in the same compose, anonymous nickname, rate limits, score sanity caps, profanity filter; the game still plays when the server is unreachable.
+Then M12 Dangers [Sonnet 5.5, high]: the CLAUDE.md dangers that do not exist yet. Gravity pull from large bodies, collisions with bigger objects (knockback plus mass shed), and one roaming hazard (comets). This is the biggest gap in the core loop; until now big prey are inert.
 How to start: `/clear`, then `/model` (Sonnet 5.5, high), then paste:
 
 ```
-Start Milestone 11 (global leaderboard) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 12 (dangers) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: a Fastify + SQLite backend (Node, in its own folder such as server/) packaged into the same docker-compose.yml as the static Caddy container, with Caddy proxying /api to it. Endpoints: submit a score (nickname from the title screen, score, tier, seconds, eaten count) and read the top scores (global top 50, plus the player's own rank). Light anti-cheat per CLAUDE.md: per-IP rate limits, score sanity caps derived from run time and the tier tables, a nickname profanity filter and the existing cleanNickname rules. No accounts, no replay validation. The score screen submits at run end and shows the top list and the player's rank; the title screen can show the top few. The frontend must still play fully when /api is unreachable (timeouts, no console errors). Add a `leaderboard-submit` analytics event through track() and the events table in deploy/DEPLOY.md, and update DEPLOY.md for the new container and its SQLite volume on TrueNAS.
+Goal: make big objects dangerous, per the Dangers section of CLAUDE.md. (1) Gravity pull: inedible bodies above a size ratio drag the hole toward them, falling off with distance, strong enough to notice but possible to steer against. (2) Collisions: touching an inedible body knocks the hole back and sheds a fraction of its mass (shed mass is not score; it must play well with the hunger fail floor), with a short invulnerability window, camera shake and a danger sound (see the audio known bug). (3) One roaming hazard: comets that cross the screen on a straight path with a glowing tail, inedible until you are big enough, spawned from tables in src/config. All tunables in src/config, no per-frame allocations, pooled like the prey. Big inert prey overlapping each other and the hole ending up inside one (Known bugs) must be handled now that contact matters. Include any playtest notes the user gives.
 
-Done when: server unit or integration tests cover submit, top list, rate limit, caps and the filter; a Playwright test covers the score screen with a mocked /api and with /api down (no console errors); npm run typecheck, npm run lint and npm test pass; docker compose up serves both and a real submit works locally; Progress.md is updated and the work is committed.
+Done when: Playwright tests cover pull (the hole drifts toward a big body with no input), collision (knockback, mass loss, invulnerability) and a comet crossing; npm run typecheck, npm run lint and npm test pass; Progress.md is updated and the work is committed.
 ```
 
 ## Milestones
@@ -28,7 +28,8 @@ Suggested model/effort in brackets.
 - [x] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high] (2026-10-09, awaiting a real phone test with `?perf`)
 - [x] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium] (2026-10-09, container done and tested locally; the manual TrueNAS, Cloudflare and Umami steps are the user's)
 - [x] M10 Share card [Sonnet 5.5, medium] (2026-10-09, awaiting a real phone share)
-- [ ] M11 Global leaderboard (Fastify + SQLite backend in the same compose) [Sonnet 5.5, high]
+- [x] M11 Global leaderboard (Fastify + SQLite backend in the same compose) [Sonnet 5.5, high] (2026-10-09, works locally in compose; not deployed)
+- [ ] M12 Dangers: gravity pull, collisions, comets [Sonnet 5.5, high]
 - [ ] Later: more tiers, daily seed, multiplayer
 
 ## Done
@@ -159,6 +160,17 @@ Suggested model/effort in brackets.
   - Tests (21 pass): desktop fallback (Web Share removed): photo is a lit frame, card is 1200x675 with text drawn, SAVE CARD downloads `spaghettify-<score>.png` with a valid PNG header of the right size, status shows, Play again clears the photo, no console errors. Touch device with a stubbed `navigator.share`: SHARE hands over one image/png file and text ending in the URL. Debug handle has `snapshot` and `share`.
   - Judged by a real-GPU still (gas giant run): the card reads well; the photo shows the hole and disk large on the right.
 
+- 2026-10-09 M11: global leaderboard.
+  - `server/` (own package.json and lockfile; run `npm --prefix server ci` once after cloning): Fastify 5 + `@fastify/rate-limit` on Node 24, SQLite through the built-in `node:sqlite` (no native module). TypeScript runs directly with Node's type stripping (no build step), so server code and anything it imports must be erasable TS with `.ts` import extensions. `src/app.ts` (`buildApp`), `src/db.ts` (`ScoreStore`), `src/index.ts` (PORT 3000, `DB_PATH`). Every accepted run is stored; the board ranks each nickname (case-insensitive) by its best run.
+  - Routes: `POST /api/scores` (201 with `rank`, `total`, `best`, `personalBest`; 400 invalid, 422 `nickname` or `implausible`, 413 over 1 KB, 429 rate), `GET /api/scores/top?limit` (max 50), `GET /api/scores/rank?score`, `GET /api/health`. All `no-store`. Rate limits 6 submits and 120 requests per minute per IP; `trustProxy` only for private ranges.
+  - Shared rules `src/leaderboard/rules.ts` (used by the game and the server): `cleanNickname` (moved from TitleScreen), `isProfane` (folded: case, accents, look-alike digits, separators, repeats; stems anywhere, short words only whole, a small allow list), `checkRun` with caps from `LEADERBOARD` in src/config: seconds 3 to 3 h, eaten at most 25 per second, score at most 1000 x the largest prey mass of the reached tier x min(2 per second x seconds + 5, eaten), and at least the reached tier's threshold mass minus the start mass. `src/config/index.ts` now re-exports with `.ts` extensions (root tsconfig `allowImportingTsExtensions`).
+  - Client `src/leaderboard/api.ts`: fetch with a 4 s abort timeout, only JSON answers count, never throws. `src/ui/leaderboardFlow.ts`: the score screen posts when there is a nickname, then shows the top 10 with the player's row lit (their row added below the cut) and "You are #n of m". Without a nickname it shows where the run would place and asks for one. Offline, rejected and rate-limited runs get a one-line message. Stale answers from an earlier run are dropped. The title screen shows the top 5 ("TOP BLACK HOLES") only when the board answers and is not empty. `src/ui/LeaderboardPanel.ts` renders nicknames with textContent.
+  - Layout: the score screen is now stats and board side by side, wrapping below on narrow screens (scrolls). The title screen scrolls when tall; the spaced-out title is centred properly (it used to sit right of centre).
+  - Analytics: `leaderboard-submit` (`result`, `tier`).
+  - Docker: `Dockerfile` has stages `build`, `api` (node:24-alpine, runs as `node`, `/data` volume, health check) and `web` (default). Caddy proxies `/api/*` to `{$API_UPSTREAM:api:3000}`. `docker-compose.yml` adds the `api` service and a `leaderboard` named volume. Verified locally: both healthy, real submit, top list, a rejected run and the moderation one-liner from DEPLOY.md; a Playwright run against the container posted a real run and showed its rank. The local volume was then reset to empty.
+  - Dev: `npm run server` (watch mode) plus `npm run dev` (Vite proxies `/api` to port 3000). `npm run typecheck` also checks `server/`; `npm test` runs the server tests (`node --test`, 9 tests: rules, submit, top, rank, rejections, body limit, rate limit including the proxy and spoofed header cases, health) and then Playwright (24 tests, also all pass against the container with `BASE_URL`).
+  - Playwright: every test stubs `/api` with an empty board by default (the server is never needed). New tests: mocked board on the title and score screens (posted body matches the run, row lit, HTML in a nickname shown as text); server refusing reads and hanging on submit (offline message after the timeout, Play again works); no nickname (nothing posted, would-place line). Chrome's own "Failed to load resource" console lines for refused /api requests are ignored in those tests; any other console error fails them.
+
 ## In progress
 (nothing)
 
@@ -205,14 +217,21 @@ Suggested model/effort in brackets.
 - 2026-10-09: The image reaches TrueNAS by `docker save` / `docker load` because the repo has no git remote. A registry (ghcr.io via GitHub Actions) is the upgrade path once the repo is pushed; not done because it is outward-facing.
 - 2026-10-09: Share card uses Web Share only on touch-first devices. Desktop Chrome on Windows also supports Web Share with files, but a Windows share sheet is a poor fit for a score screen button, so desktop always downloads (and the button says SAVE CARD there).
 - 2026-10-09: The card photo is the moment of the run's biggest meal (mid-infall, so it can show the spaghettification), not the end of the run, where the hole is small and dimmed by evaporation. Copied into a small 2D canvas right after a render instead of turning on preserveDrawingBuffer, which costs every frame.
+- 2026-10-09: Leaderboard server in Node 24 TypeScript run by type stripping, with `node:sqlite`: no compile step, no native module to build on Alpine, and the game's own rules file and tier tables are imported directly so the caps cannot drift from the game. Cost: shared files need `.ts` import extensions and erasable syntax only.
+- 2026-10-09: The board is best run per nickname (case-insensitive), not one row per run, so one player cannot fill the top 50. Nicknames are not owned: anyone can post under any name (no accounts, per CLAUDE.md).
+- 2026-10-09: Runs without a nickname are not posted (no "Anonymous" rows); the score screen shows where they would place instead. Rejections are 422 with a reason so the score screen can say what happened.
+- 2026-10-09: Score caps are deliberately loose (largest prey of the tier twice a second). They stop edited requests with absurd numbers, not skilled play. Tighten in `LEADERBOARD` if the board fills with fakes.
 - 2026-10-09: Analytics loads from a module (not a static tag in index.html) so dev, preview, the local container and tests never send events, same as Rex Chase. Default subdomain `spaghettify.swikrut.com`.
 
 ## Known bugs
+- Leaderboard: anyone can post under someone else's nickname; the best run wins either way. No admin UI (DEPLOY.md has a one-line delete). The nickname filter is English-centric and small. Quitting a run from the pause menu does not post it.
+- Leaderboard: the caps were checked against test runs only, not real long runs. If a real run is rejected as implausible, `docker logs spaghettify-api` shows it; loosen `LEADERBOARD.maxMealsPerSecond`.
+- Leaderboard: the title board is fetched each time the title shows and does not refresh while it stays open.
 - Share: not tried on a real phone. Some share targets drop the text when a file is attached, so the URL is also printed on the card. No og:image yet (a static card image for link previews would need a server-rendered or fixed image).
 - Share: the photo is whatever the camera saw 0.3 s after the record meal; a small record object early in the run, or one that is mostly off screen, gives a plain photo. A later bigger record replaces it.
 - Score screen: the hunger overlay's EVAPORATING text and vignette stay on under the score screen (faintly visible below the buttons). Pre-existing.
 - Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
-- Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score. The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
+- Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score (or post it). The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
 - Touch: scheme changes only take effect from the settings panel; a Chrome pull-to-refresh or iOS Safari edge gestures are not blocked beyond `touch-action: none` on the canvas. No haptics.
 - Menus: the music/drone keeps playing at its last level while paused.
 - Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.

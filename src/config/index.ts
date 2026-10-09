@@ -1,7 +1,7 @@
 /** All tunable numbers live here. Game logic must not hard-code these. */
 
-export * from './tiers';
-export * from './quality';
+export * from './tiers.ts';
+export * from './quality.ts';
 
 export const PLAYER = {
   /** Starting radius in world units ("pea-sized"). */
@@ -432,6 +432,7 @@ export const STORAGE = {
 } as const;
 
 export const MENU = {
+  /** Also enforced by the leaderboard server (shared rules in src/leaderboard/rules.ts). */
   nicknameMaxLength: 16,
   defaultScheme: 'mouse',
   /** Scheme picked on a touch-first device when nothing is stored yet. */
@@ -467,4 +468,34 @@ export const SHARE = {
   snapshotMinInterval: 1.5,
   /** Downloaded file name: `${filePrefix}-${score}.png`. */
   filePrefix: 'spaghettify',
+} as const;
+
+/**
+ * Global leaderboard. The server (server/) and the game share these numbers through
+ * src/leaderboard/rules.ts, so this file and what it imports must stay plain, erasable TypeScript
+ * with `.ts` import extensions (the server runs it with Node's type stripping).
+ */
+export const LEADERBOARD = {
+  /** API base path. Caddy proxies it to the api container; Vite proxies it in dev. */
+  base: '/api',
+  /** Give up on a request after this many milliseconds; the game never waits on the server. */
+  timeoutMs: 4000,
+  /** Entries the server returns for the top list, rows the score screen shows, rows the title shows. */
+  topLimit: 50,
+  scoreScreenRows: 10,
+  titleRows: 5,
+  /**
+   * Sanity caps (light anti-cheat, no replay validation). A run of `seconds` cannot eat more than
+   * `maxMealsPerSecond` meals as big as the largest prey in the tier it reached, plus `mealSlack`;
+   * nor more than `eaten` such meals. Reaching a tier needs at least its threshold mass, minus
+   * the starting mass, eaten. Generous on purpose: they catch edited requests, not good play.
+   */
+  maxMealsPerSecond: 2,
+  mealSlack: 5,
+  /** Small meals can come fast at the start (a cluster of dust), but not faster than this overall. */
+  maxEatenPerSecond: 25,
+  minSeconds: 3,
+  maxSeconds: 3 * 60 * 60,
+  /** Relative tolerance on the tier threshold check (rounding and float drift). */
+  thresholdTolerance: 0.01,
 } as const;

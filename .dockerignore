@@ -9,3 +9,5 @@ docker-compose.yml
 .dockerignore
 *.tar
 deploy
+server/node_modules
+server/data

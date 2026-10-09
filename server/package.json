@@ -1,0 +1,22 @@
+{
+  "name": "spaghettify-server",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "Global leaderboard API for Spaghettify: Fastify + SQLite (node:sqlite).",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node --disable-warning=ExperimentalWarning src/index.ts",
+    "dev": "node --disable-warning=ExperimentalWarning --watch src/index.ts",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@fastify/rate-limit": "^10.3.0",
+    "fastify": "^5.12.5"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2"
+  }
+}

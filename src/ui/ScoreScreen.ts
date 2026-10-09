@@ -1,3 +1,4 @@
+import { LeaderboardPanel } from './LeaderboardPanel';
 import { ladderLine } from './milestones';
 
 export interface RunStats {
@@ -19,6 +20,9 @@ export class ScoreScreen {
   onShare: (() => void) | null = null;
   private readonly root = document.createElement('div');
   private readonly body = document.createElement('div');
+  /** Global leaderboard beside the stats (below them on narrow screens). Filled by main. */
+  readonly board = new LeaderboardPanel('board', 'LEADERBOARD');
+  private readonly layout = document.createElement('div');
   private readonly button = document.createElement('button');
   private readonly shareButton = document.createElement('button');
   private readonly status = document.createElement('div');
@@ -36,11 +40,20 @@ export class ScoreScreen {
       fontFamily: 'system-ui, sans-serif',
       textAlign: 'center',
       zIndex: '10',
-      // Short landscape phones: scroll instead of clipping the buttons. The body centres itself with margin auto.
+      // Short landscape phones: scroll instead of clipping the buttons. The layout centres itself with margin auto.
       overflowY: 'auto',
     });
     this.root.dataset.testid = 'score-screen';
-    Object.assign(this.body.style, { padding: '24px', maxWidth: '90vw', margin: 'auto' });
+    Object.assign(this.body.style, { padding: '24px 12px', maxWidth: '90vw' });
+    Object.assign(this.layout.style, {
+      margin: 'auto',
+      display: 'flex',
+      flexWrap: 'wrap',
+      alignItems: 'center',
+      justifyContent: 'center',
+      columnGap: '40px',
+      padding: '12px 0 24px',
+    });
     Object.assign(this.button.style, {
       marginTop: '28px',
       padding: '14px 40px',
@@ -78,7 +91,8 @@ export class ScoreScreen {
     window.addEventListener('keydown', (e) => {
       if (this.visible && e.code === 'Enter') this.restart();
     });
-    this.root.append(this.body);
+    this.layout.append(this.body, this.board.root);
+    this.root.append(this.layout);
     parent.append(this.root);
   }
 

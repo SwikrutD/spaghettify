@@ -1,5 +1,8 @@
 import { MENU, STORAGE } from '../config';
+import { cleanNickname } from '../leaderboard/rules';
 import { button, FONT, overlay, show } from './dom';
+import { LeaderboardPanel } from './LeaderboardPanel';
+
 
 export function loadBest(): number {
   try {
@@ -17,19 +20,14 @@ export function saveBest(score: number): void {
   }
 }
 
-/** Keep letters, digits, spaces and a few separators; trim and cap the length. */
-export function cleanNickname(raw: string): string {
-  return raw
-    .replace(/[^\p{L}\p{N} _.-]/gu, '')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, MENU.nicknameMaxLength);
-}
-
 /** Title screen: name, best score, nickname entry, play and settings. Shown before the first run and after quitting a run. */
 export class TitleScreen {
   onPlay: (() => void) | null = null;
   onSettings: (() => void) | null = null;
+  /** Called each time the title shows, so main can refresh the top few from the leaderboard. */
+  onShow: (() => void) | null = null;
+  /** Top few players, shown only when the leaderboard answers. Filled by main. */
+  readonly board = new LeaderboardPanel('title-board', 'TOP BLACK HOLES');
   private readonly root = overlay('title-screen', 20);
   private readonly best = document.createElement('div');
   private readonly nickname = document.createElement('input');
@@ -37,7 +35,9 @@ export class TitleScreen {
 
   constructor(parent: HTMLElement = document.body) {
     const box = document.createElement('div');
-    Object.assign(box.style, { padding: '24px', width: 'min(320px, 86vw)' });
+    Object.assign(box.style, { padding: '24px', width: 'min(320px, 86vw)', margin: 'auto' });
+    // With the leaderboard the title can be taller than a landscape phone: scroll rather than clip.
+    this.root.style.overflowY = 'auto';
 
     const title = document.createElement('div');
     title.textContent = 'SPAGHETTIFY';
@@ -46,6 +46,9 @@ export class TitleScreen {
       fontWeight: '700',
       letterSpacing: '0.18em',
       textShadow: '0 0 28px rgba(255, 170, 100, 0.7)',
+      // The spaced-out title is wider than the box: a centred flex row overflows evenly on both sides.
+      display: 'flex',
+      justifyContent: 'center',
     });
     const tag = document.createElement('div');
     tag.textContent = 'Start as a pea-sized black hole. Eat everything.';
@@ -85,7 +88,9 @@ export class TitleScreen {
     const settings = button('SETTINGS', 'title-settings');
     settings.addEventListener('click', () => this.onSettings?.());
 
-    box.append(title, tag, this.best, this.nickname, play, settings);
+    this.board.root.style.display = 'none';
+    this.board.root.style.margin = '24px auto 0';
+    box.append(title, tag, this.best, this.nickname, play, settings, this.board.root);
     this.root.append(box);
     parent.append(this.root);
 
@@ -103,6 +108,7 @@ export class TitleScreen {
     this.best.textContent = `BEST ${loadBest().toLocaleString('en-US')}`;
     show(this.root, true);
     this.visible = true;
+    this.onShow?.();
   }
 
   hide(): void {

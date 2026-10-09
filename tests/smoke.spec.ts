@@ -73,6 +73,15 @@ test.beforeEach(async ({ page }) => {
       // Storage blocked (one test does this on purpose).
     }
   });
+  // The leaderboard server is not part of the test run (and must not be needed): an empty board by
+  // default. Tests that care register their own /api routes, which take precedence.
+  await page.route('**/api/**', (route) => {
+    const url = route.request().url();
+    const body = route.request().method() === 'POST'
+      ? { nickname: 'x', rank: 1, total: 1, best: 0, personalBest: true }
+      : url.includes('/rank') ? { rank: 1, total: 1 } : { entries: [], total: 0 };
+    return route.fulfill({ status: route.request().method() === 'POST' ? 201 : 200, contentType: 'application/json', body: JSON.stringify(body) });
+  });
 });
 
 /** The title screen holds the run until Play is pressed. */
@@ -658,6 +667,108 @@ test('share card: the score screen renders a card with the run photo and SAVE CA
   await page.getByTestId('play-again').click();
   await page.waitForFunction(() => window.__spaghettify.hunger.phase === 'playing');
   expect(await page.evaluate(() => window.__spaghettify.snapshot.taken)).toBe(0);
+  expect(errors).toEqual([]);
+});
+
+/** Console errors, minus Chrome's own "Failed to load resource" lines for /api requests that were refused on purpose. */
+function collectErrors(page: Page): string[] {
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() !== 'error') return;
+    if (m.text().startsWith('Failed to load resource') && m.location().url.includes('/api/')) return;
+    errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+  return errors;
+}
+
+test('leaderboard: the title shows the top few, the score screen posts the run and shows the board with the player lit', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 640, height: 360 });
+  const errors = collectErrors(page);
+  const posted: Record<string, unknown>[] = [];
+  const entries = [
+    { rank: 1, nickname: 'Sagittarius', score: 9_000_000, tier: 3 },
+    { rank: 2, nickname: '<img src=x onerror=alert(1)>', score: 5_000_000, tier: 3 },
+    { rank: 3, nickname: 'Cygnus', score: 2_000_000, tier: 3 },
+    { rank: 4, nickname: 'Pea', score: 900, tier: 1 },
+    { rank: 5, nickname: 'Dust', score: 50, tier: 1 },
+  ];
+  await page.route('**/api/scores/top*', (route) =>
+    route.fulfill({ contentType: 'application/json', body: JSON.stringify({ entries, total: 42 }) }),
+  );
+  await page.route('**/api/scores', (route) => {
+    posted.push(route.request().postDataJSON());
+    return route.fulfill({ status: 201, contentType: 'application/json', body: JSON.stringify({ nickname: 'Pea', rank: 4, total: 42, best: 900, personalBest: false }) });
+  });
+  await page.addInitScript(() => localStorage.setItem('spaghettify.nickname', 'Pea'));
+
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  // Title: the top five, the player's own row lit, nicknames as plain text.
+  const titleBoard = page.getByTestId('title-board');
+  await expect(titleBoard).toBeVisible();
+  await expect(titleBoard.locator('li')).toHaveCount(5);
+  await expect(titleBoard.locator('li').nth(1)).toContainText('<img src=x onerror=alert(1)>');
+  await expect(titleBoard.locator('li[data-mine]')).toContainText('Pea');
+
+  await startRun(page);
+  await playShortRun(page);
+  await expect(page.getByTestId('board-status')).toHaveText('Your best: 900. You are #4 of 42.');
+  const run = await page.evaluate(() => ({ score: Math.round(window.__spaghettify.player.eatenMass * 1000), eaten: window.__spaghettify.player.eatenCount, seconds: window.__spaghettify.hunger.runTime }));
+  expect(posted).toHaveLength(1);
+  expect(posted[0]).toMatchObject({ nickname: 'Pea', score: run.score, tier: 1, eaten: run.eaten });
+  expect(posted[0].seconds as number).toBeCloseTo(run.seconds, 0);
+  const rows = page.getByTestId('board-rows').locator('li');
+  await expect(rows).toHaveCount(5);
+  await expect(page.getByTestId('board-rows').locator('li[data-mine]')).toContainText('Pea');
+  await expect(page.getByTestId('play-again')).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('leaderboard: with the server down or hanging the game plays, the board says so, and nothing errors', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 480, height: 270 });
+  const errors = collectErrors(page);
+  // Reads are refused at once; the score submit hangs until the client's own timeout gives up.
+  await page.route('**/api/scores/top*', (route) => route.abort('connectionrefused'));
+  await page.route('**/api/scores', () => {});
+  await page.addInitScript(() => localStorage.setItem('spaghettify.nickname', 'Pea'));
+
+  await page.goto('/');
+  await page.mouse.move(240, 135);
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await expect(page.getByTestId('title-board')).toBeHidden();
+  await startRun(page);
+  await playShortRun(page);
+  await expect(page.getByTestId('board-status')).toHaveText('Posting your score...');
+  await expect(page.getByTestId('board-status')).toHaveText(/^Leaderboard unavailable right now/, { timeout: 10_000 });
+  await expect(page.getByTestId('board-rows').locator('li')).toHaveCount(0);
+
+  // Play again works and the next run plays normally.
+  await page.getByTestId('play-again').click();
+  await page.waitForFunction(() => window.__spaghettify.hunger.phase === 'playing');
+  const frames = await page.evaluate(() => window.__spaghettify.frames);
+  await page.waitForFunction((f) => window.__spaghettify.frames > f + 10, frames);
+  expect(errors).toEqual([]);
+});
+
+test('leaderboard: without a nickname nothing is posted and the board shows where the run would place', async ({ page }) => {
+  test.setTimeout(120_000);
+  await page.setViewportSize({ width: 480, height: 270 });
+  const errors = collectErrors(page);
+  let posts = 0;
+  await page.route('**/api/scores', (route) => {
+    posts++;
+    return route.abort();
+  });
+  await page.route('**/api/scores/rank*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ rank: 17, total: 30 }) }));
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
+  await playShortRun(page);
+  await expect(page.getByTestId('board-status')).toHaveText('This run would place #17 of 30. Set a nickname on the title screen to post your scores.');
+  expect(posts).toBe(0);
   expect(errors).toEqual([]);
 });
 

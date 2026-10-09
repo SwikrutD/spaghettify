@@ -1,13 +1,17 @@
 # Local use: `docker compose up -d --build`, then open http://localhost:8095
-# On TrueNAS see deploy/DEPLOY.md (the image is built there and referenced by name).
+# On TrueNAS see deploy/DEPLOY.md (the images are loaded there and referenced by name).
 services:
   spaghettify:
-    build: .
+    build:
+      context: .
+      target: web
     image: spaghettify:latest
     container_name: spaghettify
     restart: unless-stopped
     ports:
       - "8095:8080"
+    depends_on:
+      - api
     read_only: true
     # Caddy keeps nothing worth persisting here, but wants these writable.
     tmpfs:
@@ -18,3 +22,26 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+
+  # Leaderboard API, reachable only through Caddy (/api). The SQLite file lives on the volume.
+  api:
+    build:
+      context: .
+      target: api
+    image: spaghettify-api:latest
+    container_name: spaghettify-api
+    restart: unless-stopped
+    environment:
+      DB_PATH: /data/leaderboard.db
+    volumes:
+      - leaderboard:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  leaderboard:

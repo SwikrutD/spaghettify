@@ -9,6 +9,13 @@
 }
 
 :8080 {
+	# Leaderboard API (the api container). The game copes when it is down: Caddy answers 502 and
+	# the client treats that as offline. API_UPSTREAM lets a different host or port be used.
+	# The api sets its own Cache-Control: no-store; errors get it from handle_errors below.
+	handle /api/* {
+		reverse_proxy {$API_UPSTREAM:api:3000}
+	}
+
 	root * /srv
 
 	# Vite puts content-hashed files in /assets: safe to cache forever.
@@ -16,7 +23,7 @@
 	header @hashed Cache-Control "public, max-age=31536000, immutable"
 
 	# index.html (and anything else unhashed) must be revalidated so a deploy shows up at once.
-	@unhashed not path /assets/*
+	@unhashed not path /assets/* /api/*
 	header @unhashed Cache-Control "no-cache"
 
 	header {

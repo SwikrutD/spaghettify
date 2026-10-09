@@ -20,6 +20,7 @@ import { cardBlob, cardFileName, renderShareCard, shareText } from './share/shar
 import { isTouchFirst, Settings } from './settings/Settings';
 import { TierDirector } from './spawning/TierDirector';
 import { HungerOverlay } from './ui/HungerOverlay';
+import { postRunToBoard, refreshTitleBoard } from './ui/leaderboardFlow';
 import { PauseMenu } from './ui/PauseMenu';
 import { PerfOverlay } from './ui/PerfOverlay';
 import { ScoreScreen, type RunStats } from './ui/ScoreScreen';
@@ -85,6 +86,7 @@ hunger.onEnd = () => {
   };
   scoreScreen.show(stats);
   prepareShare(stats);
+  void postRunToBoard(scoreScreen.board, stats, title.nicknameValue);
   track('run-end', {
     band: scoreBand(score),
     tier: tiers.index + 1,
@@ -216,6 +218,7 @@ title.onPlay = () => {
   setMode('playing');
   track('run-start', { from: 'title' });
 };
+title.onShow = () => void refreshTitleBoard(title.board, title.nicknameValue);
 title.onSettings = () => {
   title.hide();
   openSettings('title');

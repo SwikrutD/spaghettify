@@ -1,16 +1,33 @@
 # Deploying Spaghettify
 
-The game is a static Vite build served by Caddy inside one Docker container. There is no backend yet.
-The container listens on port 8080 inside and is published on host port 8095 (change it freely).
-TLS is not handled by the container: Cloudflare (Tunnel or proxy) sits in front of it.
+Two containers from one `Dockerfile`, run together by `docker-compose.yml`:
 
-What the image does:
+- **`spaghettify`** (image `spaghettify:latest`, the default build target `web`): Caddy serving the Vite
+  build and proxying `/api/*` to the api container. Listens on 8080 inside, published on host port 8095
+  (change it freely). This is the only container Cloudflare talks to.
+- **`api`** (image `spaghettify-api:latest`, target `api`): the leaderboard, Fastify on Node 24 with the
+  built-in SQLite. Listens on 3000 on the compose network only (no published port). Its database file is
+  `/data/leaderboard.db` on a volume. If it is down, the game still plays; the score screen says the
+  leaderboard is unavailable.
+
+TLS is not handled by the containers: Cloudflare (Tunnel or proxy) sits in front of them.
+
+What the web image does:
 
 - `npm ci`, `npm run build` (typecheck plus Vite build), then `scripts/precompress.mjs` writes `.br` and `.gz` copies.
 - Caddy serves `/assets/*` (content-hashed) with `Cache-Control: public, max-age=31536000, immutable`
   and everything else (`index.html`) with `no-cache`, so a new deploy shows up on the next load.
 - Brotli or gzip from the precompressed files, on-the-fly gzip or zstd for anything else. Errors are `no-store`.
 - Health check: `wget` on `/` every 30 s.
+
+What the api does:
+
+- `POST /api/scores`, `GET /api/scores/top`, `GET /api/scores/rank?score=n`, `GET /api/health`, all `no-store`.
+- Light anti-cheat: 6 score submissions and 120 requests per minute per client IP, score sanity caps from
+  the run time and the tier tables, a nickname filter (shared rules in `src/leaderboard/rules.ts`).
+- The client IP is taken from `X-Forwarded-For` only through proxies on private addresses (Caddy,
+  cloudflared), so a player cannot dodge the rate limit with a made-up header.
+- Logs only rejected runs and errors (`docker logs spaghettify-api`).
 
 ## 0. Before the first deploy (on your PC)
 
@@ -28,14 +45,14 @@ What the image does:
    Optional: run the whole test suite against the container with
    `$env:BASE_URL='http://localhost:8095'; npm test` (PowerShell) or `BASE_URL=http://localhost:8095 npm test` (bash).
 
-## 1. Get the image onto TrueNAS
+## 1. Get the images onto TrueNAS
 
-The repo has no git remote, so the simplest path is to build on the PC and copy the image across.
-Both machines are x86-64, so the image runs as is.
+The repo has no git remote, so the simplest path is to build on the PC and copy the images across.
+Both machines are x86-64, so the images run as is.
 
 ```
-docker build -t spaghettify:latest .
-docker save spaghettify:latest -o spaghettify.tar
+docker compose build
+docker save spaghettify:latest spaghettify-api:latest -o spaghettify.tar
 ```
 
 Copy `spaghettify.tar` to a TrueNAS share (for example `/mnt/<pool>/apps/spaghettify/`), then in
@@ -43,11 +60,22 @@ TrueNAS: System > Shell (or SSH as admin):
 
 ```
 sudo docker load -i /mnt/<pool>/apps/spaghettify/spaghettify.tar
-sudo docker image ls spaghettify
+sudo docker image ls | grep spaghettify
 ```
 
-(Alternative: copy the repo without `node_modules` and `dist` to the dataset and run
-`sudo docker build -t spaghettify:latest .` there. Later, if the repo goes to GitHub, a GitHub Actions
+**The leaderboard database.** Create a dataset for it, for example `<pool>/apps/spaghettify/leaderboard`
+(Datasets > Add Dataset, preset Apps or Generic). The api runs as the `node` user (uid 1000) and must be
+able to write there:
+
+```
+sudo chown 1000:1000 /mnt/<pool>/apps/spaghettify/leaderboard
+```
+
+Back it up with your usual snapshot task; it is one small SQLite file (plus `-wal` and `-shm` files
+while running).
+
+(Alternative: copy the repo without `node_modules`, `server/node_modules` and `dist` to the dataset and run
+`sudo docker compose build` there. Later, if the repo goes to GitHub, a GitHub Actions
 workflow can push to ghcr.io and TrueNAS can pull it; that is not set up.)
 
 ## 2. Create the TrueNAS app
@@ -62,6 +90,8 @@ services:
     restart: unless-stopped
     ports:
       - "8095:8080"
+    depends_on:
+      - api
     read_only: true
     tmpfs:
       - /tmp
@@ -71,9 +101,27 @@ services:
       - ALL
     cap_add:
       - NET_BIND_SERVICE
+
+  api:
+    image: spaghettify-api:latest
+    pull_policy: never
+    restart: unless-stopped
+    environment:
+      DB_PATH: /data/leaderboard.db
+    volumes:
+      - /mnt/<pool>/apps/spaghettify/leaderboard:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
 ```
 
-`pull_policy: never` makes it use the image you loaded instead of looking for it on Docker Hub.
+`pull_policy: never` makes it use the images you loaded instead of looking for them on Docker Hub.
+The service must be called `api`: Caddy proxies to `api:3000` (or set `API_UPSTREAM` on the
+`spaghettify` service to another `host:port`).
 If port 8095 is taken on the NAS, change the left number. Check http://<truenas-ip>:8095 from your LAN.
 
 ## 3. Cloudflare: point the subdomain at it
@@ -104,14 +152,28 @@ curl -sI https://spaghettify.swikrut.com/ | grep -i cache-control              #
 curl -sI -H "Accept-Encoding: br" https://spaghettify.swikrut.com/assets/<file>.js   # immutable, br
 ```
 
+```
+curl -s https://spaghettify.swikrut.com/api/health                              # {"ok":true}
+curl -s https://spaghettify.swikrut.com/api/scores/top                          # {"entries":[...],"total":n}
+```
+
 Open the site, play a run and check Umami's Realtime view shows the visit and a `run-start` event.
+Set a nickname on the title screen and play a run: the score screen shows your rank and the board.
 Open `/?perf` on a phone to see the frame time and the quality level it settles on.
 
 ## Updating
 
-On the PC: commit, `docker build -t spaghettify:latest .`, `docker save spaghettify:latest -o spaghettify.tar`.
+On the PC: commit, `docker compose build`, `docker save spaghettify:latest spaghettify-api:latest -o spaghettify.tar`.
 On TrueNAS: `sudo docker load -i .../spaghettify.tar`, then Apps > spaghettify > Stop, then Start
-(or `sudo docker restart` the container) so it picks up the new image. Old images can be removed
+so both containers pick up the new images. The leaderboard survives updates (it lives on the dataset).
+
+**Moderating the board.** There is no admin UI. To remove a nickname (all its runs):
+
+```
+sudo docker exec -it spaghettify-api node -e "const {DatabaseSync}=require('node:sqlite');new DatabaseSync('/data/leaderboard.db').prepare('DELETE FROM scores WHERE nickname = ? COLLATE NOCASE').run(process.argv[1])" "<nickname>"
+```
+
+The nickname filter lists live in `src/leaderboard/rules.ts`. Old images can be removed
 with `sudo docker image prune`.
 
 ## Analytics events
@@ -122,6 +184,7 @@ Page views are automatic. Custom events (sent only on the live hostname, see `sr
 | --- | --- | --- |
 | `run-start` | Play from the title screen or Play again | `from` (`title` or `restart`) |
 | `run-end` | The hole evaporates | `band` (score range), `tier`, `seconds`, `eaten`, `newBest` |
+| `leaderboard-submit` | The score screen posted a run (only with a nickname set) | `result` (`ok`, `offline`, `nickname`, `implausible`, `invalid` or `rate`), `tier` |
 | `share` | The share card was shared (share sheet) or saved (download) from the score screen | `method` (`share` or `download`), `band`, `tier` |
 
-No cookies, no IDs and never the nickname.
+No cookies, no IDs and never the nickname (the nickname only goes to the game's own leaderboard API).
