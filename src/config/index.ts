@@ -1,10 +1,17 @@
 /** All tunable numbers live here. Game logic must not hard-code these. */
 
+export * from './tiers';
+
 export const PLAYER = {
   /** Starting radius in world units ("pea-sized"). */
   startRadius: 0.5,
-  /** Top speed in world units per second. */
+  /** Top speed in world units per second at the starting camera distance. */
   maxSpeed: 9,
+  /**
+   * Top speed scales with the camera distance ^ this. 1 keeps the on-screen speed constant as the view
+   * zooms out (the Hole.io feel: always fast); above 1 gets slightly faster on screen as you grow.
+   */
+  speedExponent: 1,
   /** How quickly velocity chases the desired velocity (1/s). Lower = more drifty. */
   responsiveness: 3.2,
   /** Passive drag applied every frame (1/s). */
@@ -12,38 +19,44 @@ export const PLAYER = {
 } as const;
 
 export const GROWTH = {
-  /** Mass of an object of radius r is massDensity * r^3 (the player starts with the same rule). */
+  /**
+   * Mass of an object of radius r is massDensity * r ^ massExponent (the player starts with the same rule).
+   * 2 makes mass an area, like Hole.io: eating an object adds its area to the hole, so growth stays
+   * proportionate at every scale. Tier thresholds are in these mass units (mass = radius squared).
+   */
   massDensity: 1,
+  massExponent: 2,
   /** Fraction of a prey object's mass that the player absorbs. */
   absorbEfficiency: 1,
-  /** radius = startRadius * (mass / startMass) ^ radiusExponent. 1/3 would conserve volume; higher grows faster. */
+  /** radius = startRadius * (mass / startMass) ^ radiusExponent. Keep at 1 / massExponent to conserve area; higher grows faster. */
   radiusExponent: 0.5,
   /** How quickly the visible radius chases the radius implied by mass (1/s). */
   radiusSmoothing: 5,
 } as const;
 
 export const PREY = {
-  /** Fixed pool size (entity budget). Placeholder until tiers arrive in M5. */
-  count: 60,
-  /** Prey radius range as a multiple of the player radius at spawn time. Sampled log-uniformly. */
-  sizeRelMin: 0.2,
-  sizeRelMax: 2.2,
   /** Player can eat an object whose radius is below this fraction of its own radius. */
   edibleRatio: 0.95,
   /** Eaten when the distance to the player is below playerRadius + preyRadius * eatReach. */
   eatReach: 0.25,
-  /** Initial fill: spawn distance range in player radii. */
-  initialInner: 4,
-  initialOuter: 32,
-  /** Respawn ring (player radii), just beyond the visible area. */
-  respawnInner: 26,
-  respawnOuter: 34,
-  /** Objects farther than this many player radii are recycled. */
-  despawnDistance: 44,
-  /** Off-screen prey smaller than this fraction of the minimum spawn size (relative to the player) are recycled. */
-  staleRatio: 0.6,
-  /** Max drift speed in player radii per second. */
-  driftSpeed: 0.12,
+  /**
+   * Spawn and despawn distances are in camera distances (the view scale), so the field always covers the
+   * screen whatever the tier. Initial fill (and tier-up refill): spawn distance range.
+   */
+  initialInner: 0.15,
+  initialOuter: 1.45,
+  /** Respawn ring, just beyond the visible area. */
+  respawnInner: 1.2,
+  respawnOuter: 1.55,
+  /** Objects farther than this are recycled. */
+  despawnDistance: 2,
+  /**
+   * Prey smaller than this fraction of the player radius are specks: never spawned (when the tier
+   * table has anything bigger) and recycled once off screen. Keeps the screen full of useful prey.
+   */
+  minRelSize: 0.07,
+  /** Max drift speed in camera distances per second. */
+  driftSpeed: 0.006,
   /** Max spin speed in rad/s. */
   spinSpeed: 0.8,
   /** Seconds to scale in after spawning. */
@@ -51,13 +64,6 @@ export const PREY = {
   /** Rock surface roughness (fraction of radius) and mesh detail. */
   roughness: 0.18,
   meshDetail: 2,
-  /** Colour palette (HSL) for prey. */
-  hueMin: 0.04,
-  hueMax: 0.12,
-  satMin: 0.05,
-  satMax: 0.35,
-  lightMin: 0.35,
-  lightMax: 0.6,
 } as const;
 
 /**
@@ -113,11 +119,17 @@ export const INPUT = {
 export const CAMERA = {
   /** Angle of the view direction below the horizon, in degrees (90 = straight down). */
   tiltDegrees: 58,
-  /** Distance from the player, as a multiple of player radius. */
-  distancePerRadius: 22,
+  /** Distance from the player at the starting radius. */
+  startDistance: 11,
+  /**
+   * Distance grows as (radius / startRadius) ^ zoomExponent. Below 1 the hole gets bigger on screen as
+   * it grows (0 would never zoom out, 1 keeps it the same size). Hole.io style: grow, zoom out slowly.
+   */
+  zoomExponent: 0.7,
   fov: 45,
-  near: 0.1,
-  far: 2000,
+  /** Clip planes as a multiple of the camera distance, so depth precision holds at every scale. */
+  nearPerDistance: 0.009,
+  farPerDistance: 180,
   /** Camera follow smoothing (1/s). */
   followSmoothing: 6,
 } as const;
@@ -127,7 +139,7 @@ export const DISK = {
   innerRadius: 1.35,
   /** Outer edge in player radii at heat 0 and heat 1. Heat is the 0..1 feeding level, see below. */
   outerRadiusMin: 3.0,
-  outerRadiusMax: 4.4,
+  outerRadiusMax: 3.6,
   /** Half-thickness at the outer edge in player radii at heat 0 and 1. The disk flares from zero at the inner edge. */
   thicknessMin: 0.06,
   thicknessMax: 0.2,
@@ -173,7 +185,7 @@ export const DISK = {
    * activity: recent accretion rate; each meal adds (gained mass / current mass) * feedGain, decaying at feedDecay (1/s).
    */
   growthWeight: 0.45,
-  growthFullMassRatio: 300,
+  growthFullMassRatio: 100000,
   activityWeight: 0.7,
   feedGain: 5,
   feedDecay: 0.45,

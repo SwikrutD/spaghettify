@@ -1,8 +1,18 @@
 # Progress - Spaghettify
 
 ## Next session
-M5 Spawning and size tiers (debris, asteroids/moons, planets). Recommended: Sonnet 5.5, high (per milestone list). Replace the relative-size prey pool with absolute tier tables and mass thresholds that change scene scale and prey table, with a short tier-up set piece. Keep prey in the one spaghettifying InstancedMesh (or one per tier mesh type, each with the same `createPreyMaterial`). User should first playtest M1 to M4 and report tweaks to `GROWTH`, `PREY`, `SPAGHETTI`, `DISK`, `BLOOM`, `LENSING`.
-How to start: `/clear`, then `/model` (Sonnet 5.5, high), then paste the M5 start prompt from the M4 recap. Done when tiers work, tsc, ESLint and `npm test` pass (add a tier-up assertion), Progress.md updated and committed.
+M6 Hunger / Hawking evaporation fail state and score screen. Recommended: Sonnet 5.5, medium (per milestone list). Playtest M5 first if you have not, and report tweaks to `GROWTH`, `PREY`, `TIERS` (src/config/tiers.ts), `CAMERA`, `PLAYER`, `DISK`.
+How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste the start prompt below.
+
+```
+Start Milestone 6 (Hunger / Hawking evaporation fail state and score screen) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+
+Goal: if the player goes too long without eating they slowly lose mass (Hawking radiation) and the run ends when mass falls to a floor. Tunables go in a new HUNGER block in src/config (grace time, decay rate, fail mass). Show a hunger warning before it gets bad (simple and on theme, for example the disk dims and a small vignette or text). At run end show a score screen: score = mass eaten, biggest object eaten (player.biggestEaten, class names are already correct), tier reached, a milestone ladder line such as "You ate a moon", and a play again button that resets the run cleanly (player, prey pool, tier director, camera). The tier is monotonic today (TierDirector never goes down); keep it that way unless you decide otherwise and log why. Keep prey rendering through createPreyMaterial (layer 0, opaque, alpha 1). Player-facing copy: no em dashes, no serial commas, ASCII quotes.
+
+Known: Player.mass only goes up today; Player.update chases radiusForMass(), so shrinking works once mass drops. DISK heat should dim when starving (see Decisions log). The tier-up set piece (TierDirector) runs on real time and slows game time with timeScale, so the run-end screen must not fight it. The debug handle window.__spaghettify exposes player, prey, tiers, camera and renderer.
+
+Done when: a run can be lost to hunger and restarted, the score screen shows the stats above, and tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test) with the eating, spaghettify and tier-up tests still green. Add a smoke test for the fail state and restart. Update Progress.md and commit at the end.
+```
 
 ## Milestones
 Suggested model/effort in brackets.
@@ -12,7 +22,7 @@ Suggested model/effort in brackets.
 - [x] M2 Accretion disk shader [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M3 Gravitational lensing shader [Opus 5.5, xhigh] (2026-10-09, awaiting user playtest)
 - [x] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high] (2026-10-09, awaiting user playtest)
-- [ ] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high]
+- [x] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
 - [ ] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium]
 - [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium]
 - [ ] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high]
@@ -33,7 +43,7 @@ Suggested model/effort in brackets.
   - `src/entities/PreyField.ts`: fixed pool of 60 lumpy rocks as one `InstancedMesh` (per-instance colour, spin, slow drift). Eat on contact if `radius < player.radius * edibleRatio`; eaten objects shrink into the hole (`eatTime`) then the slot is respawned on a ring just off screen. Spawn scale-in, far and stale (outgrown, off-screen) objects are recycled. Larger objects are inert (no damage or gravity).
   - `src/player/Player.ts`: `mass`, `eat(mass)`, `radiusForMass()`; visible `radius` chases the mass-implied radius (`GROWTH.radiusSmoothing`). `massOfRadius()` is shared by player and prey.
   - Config: `GROWTH` (density, absorbEfficiency, radiusExponent 0.5, smoothing), `PREY` (count, relative size range, eat ratio, spawn rings, drift, colours), `LIGHTING`.
-  - Prey sizes are RELATIVE to the player radius at spawn time (0.2x to 2.2x, log-uniform, about 65 percent edible), so the field scales with you forever. M5 replaces this with absolute tier tables.
+  - (Prey sizes were relative to the player radius in M1; M5 replaced that with absolute tier tables.)
   - Smoke test now has a second test: teleports onto an edible prey via the debug handle (`player`, `prey`, `prey.isEdible`), asserts mass, radius and eatenCount rise, and that a larger object is not eaten.
   - Camera zoom (`distancePerRadius` 22) was checked by screenshot at radius 0.5 and 4.5: framing stays consistent. Feel not judged by a human yet.
 
@@ -70,6 +80,16 @@ Suggested model/effort in brackets.
   - Smoke test 4: no stretch far away, stretch along the hole line when close, stretch above 1.5 and aligned with the hole every frame of the infall, and by the last infall frame the object is close to the centre and drained. Reads the GPU attribute and instance matrices.
   - Judged by screenshot (SwiftShader, frozen infall at several progress values and angles): a curved, thin stream that wraps into the core; from behind the hole the lens lifts it over the far disk. Not yet judged in motion by a human.
 
+- 2026-10-09 M5: scale fixes, size tiers, set piece.
+  - Playtest fixes. Speed was a fixed 9 u/s while the camera zoomed in proportion to radius, so on-screen speed fell as you grew. Now `PLAYER.maxSpeed * viewScale ^ speedExponent` (viewScale = camera distance over start distance, exponent 1): constant on-screen speed, Hole.io style. The "only the ring grows" bug: camera distance was exactly proportional to radius (core constant on screen) while the disk widened with heat. Now distance = `CAMERA.startDistance * (radius / startRadius) ^ zoomExponent` (0.7), so the hole itself gets bigger on screen as it grows. Disk growth is smaller too (`DISK.outerRadiusMax` 4.4 to 3.6, `growthFullMassRatio` 300 to 100000 so heat growth spans the whole game).
+  - Mass is area-like: `GROWTH.massExponent` 2 (mass = radius squared, was cubed), radiusExponent 0.5 conserves area. With absolute prey sizes the old cubic prey mass made one big meal jump a whole tier. Tier thresholds use these units (mass 9 is radius 3, mass 400 is radius 20).
+  - `src/config/tiers.ts`: `TIERS` (title, `minMass`, entity budget `count`, `cameraScale`, weighted prey classes with a log-uniform radius range and HSL colour ranges), `TIER_UP` set piece tunables, helpers `tierIndexForMass`, `tierMinRadius`, `PREY_POOL_SIZE`. Class names are generic real classes (dust grain, pebble, rock, boulder, asteroid, small moon, dwarf planet, moon, rocky planet, ice giant, gas giant); sizes are ordered correctly but not to scale.
+  - `PreyField`: one pool of `PREY_POOL_SIZE` slots, the first `tier.count` live (`mesh.count`). Respawn draws a class by weight from the current tier and redraws specks below `PREY.minRelSize` x player radius. Spawn, respawn and despawn distances are now in camera distances (`PREY` initialInner/Outer, respawnInner/Outer, despawnDistance, driftSpeed) from `view.targetDistance`, so the field always fills the screen. `setTier()` refills slots that join and any live prey smaller than the new table's minimum. `PreyObject.className` is stored; `player.biggestEaten` records the biggest object eaten.
+  - `src/spawning/TierDirector.ts`: tier index (monotonic) from `player.mass`, `onTierUp`, and the set piece envelopes on real time: camera `punch`, game `timeScale` dip (0.25 for 0.9 s), white `flash`. `src/ui/TierBanner.ts`: DOM flash plus "TIER n / title" banner. `GameCamera`: tier scale eases in (`TIER_UP.pullRate`), punch adds up to 30 percent distance, near and far clip planes scale with distance, `targetDistance` and `viewScale` getters.
+  - `src/scene/Starfield.ts` and `starfield.vert.glsl`: the star field now wraps around the player and scales with the view scale. Before it was fixed in the world (300 extent) and would run out of stars when you travel or zoom out.
+  - Smoke tests 5 and 6: crossing each threshold by eating (mass set just under the threshold) changes the tier, raises the camera scale and target distance, dips `timeScale`, leaves no live prey below the new table's minimum, records `biggestEaten` and shows the banner; the final live prey all fit tier 3's table. On-screen speed stays within 25 percent between mass 0.25 and 100. Both use a small viewport (SwiftShader is slow).
+  - Judged by screenshot on the real GPU (`--use-angle=d3d11`, 60 fps at 1280x720 at all tiers): the hole core grows from about 16 percent of screen height at the start to about 22 to 25 percent and steps back at each tier pull-back; prey table and colours change per tier. Feel in motion, pacing and the set piece have not been judged by a human.
+
 ## In progress
 (nothing)
 
@@ -95,6 +115,12 @@ Suggested model/effort in brackets.
 - 2026-10-09: Stretch happens in world space after the instance transform (not in local space), so spin does not twist the stream; the CPU passes the hole direction per instance.
 - 2026-10-09: Added a spiral curl and swirl on the infall, plus a tidal heating glow. A straight stick read as a stretched rock; the curl reads as matter falling into a spinning hole. All three can be zeroed in `SPAGHETTI`.
 
+- 2026-10-09: On-screen movement speed is held constant by scaling world speed with the camera distance (exponent 1), and the camera zooms out more slowly than the hole grows (exponent 0.7) so the hole gets visibly bigger. Tier pull-backs shrink it again on screen, so it ranges about 1x to 2.3x its starting size.
+- 2026-10-09: Mass is area-like (radius squared) so absolute-size prey stay proportionate: a meal the size of the hole roughly doubles its area. A cubic prey mass made single meals jump tiers.
+- 2026-10-09: Prey tables are absolute but the screen stays useful through the `minRelSize` filter (no specks next to a big hole) and the table design (the small end of each table is edible at the tier start, the big end is 5 to 10 times the tier-start radius and rare). Spawn distances are fractions of the camera distance, not of the player radius.
+- 2026-10-09: Tier never goes back down (monotonic) so shedding mass cannot replay the set piece. Revisit in M6 if hunger shrinking should drop tiers.
+- 2026-10-09: Tier set piece = camera pull-back punch + 0.9 s slow-mo + white flash + banner, all driven by one `TierDirector` on real time. The prey refill at tier-up happens under the flash so nothing visibly pops.
+
 ## Known bugs
 - Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.
 - Spaghetti: a stream behind the hole is lifted by the lens and wraps along the shadow edge instead of visibly entering the core. Looks like a photon-ring wrap; judge in playtest.
@@ -103,6 +129,10 @@ Suggested model/effort in brackets.
 - Lens: near a prey close to the hole, stars bent with the plane strength sit next to stars bent with the full strength, so star positions jump slightly there. Not noticeable in screenshots.
 - Lens: a star exactly behind the hole makes an Einstein ring with faint beads (magnified texels of a small star sprite). Rare and brief.
 - Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. The M4 infall now starts from there, so it reads as being pulled in; judge in playtest.
+- Prey: planets and moons are the same flat-shaded lumpy low-poly rock mesh as asteroids, only coloured per class. Big bodies look like potatoes; needs round smooth bodies (a second mesh type or a per-instance roundness) at the M7 visual pass.
+- Prey: big inert objects overlap each other, and the hole can end up inside one when it drifts into it. Harmless until dangers arrive; spawn clears the hole but nothing separates prey from prey.
+- Tiers: thresholds (mass 9 and 400), counts (80, 70, 60) and class weights are set from numbers and stills only. The early game may be sparse or a tier too short or long; tune `TIERS` after a playtest.
+- Tests: SwiftShader runs about 3 to 5 fps at 1280x720 with the lens on, so the tier and speed tests use a small viewport. For real performance numbers or screenshots, a scratch spec with `launchOptions.args: ['--use-angle=d3d11', '--ignore-gpu-blocklist']` uses the GPU.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
 - Smoke test "bigger object not eaten" can in theory flake if the player grows enough from a stray meal during its 300 ms window.
 - Disk fill cost: 3 layers x 2 flow phases x 3 noise octaves per pixel. Fine on desktop; unverified on a phone. M8 can drop `DISK.layers` or `noiseOctaves` per quality level.

@@ -7,13 +7,21 @@ interface Debug {
     radius: number;
     mass: number;
     eatenCount: number;
+    biggestEaten: { name: string; radius: number } | null;
     disk: { heat: number };
+    velocity: { x: number; z: number };
+    radiusForMass(): number;
   };
+  tiers: { index: number; tier: { title: string; count: number; cameraScale: number }; timeScale: number };
+  allTiers: { title: string; minMass: number; count: number; cameraScale: number; classes: { radius: [number, number] }[] }[];
+  camera: { targetDistance: number; viewScale: number };
   prey: {
     objects: {
       position: { x: number; z: number; set(x: number, y: number, z: number): void };
       velocity: { set(x: number, y: number, z: number): void };
       radius: number;
+      mass: number;
+      className: string;
       state: string;
     }[];
     isEdible(obj: unknown): boolean;
@@ -266,4 +274,130 @@ test('edible prey spaghettify: they stretch toward the hole and drain into the c
   expect(result.last!.scale).toBeLessThan(result.radius * 0.5);
 
   expect(errors).toEqual([]);
+});
+
+test('crossing a mass threshold changes tier: prey table, entity budget and camera scale', async ({ page }) => {
+  test.setTimeout(180_000);
+  await page.setViewportSize({ width: 480, height: 270 });
+  const errors: string[] = [];
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+  page.on('pageerror', (e) => errors.push(e.message));
+
+  await page.goto('/');
+  await page.mouse.move(240, 135);
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+
+  // Grow to just under a tier threshold, let the radius catch up, then eat one more object to cross it.
+  const crossInto = (tierIndex: number) =>
+    page.evaluate(async (tierIndex) => {
+      const d = window.__spaghettify;
+      const { player, prey, tiers, allTiers } = d;
+      const nextFrame = async () => {
+        const f = d.frames;
+        while (d.frames === f) await new Promise(requestAnimationFrame);
+      };
+      if (tiers.index !== tierIndex - 1) throw new Error(`expected tier ${tierIndex - 1}, got ${tiers.index}`);
+      // Keep the hole from eating anything while it grows to the threshold: flush the field out to the respawn ring.
+      for (const o of prey.objects) o.position.x += 100000;
+      await nextFrame();
+      const before = { count: tiers.tier.count, distance: d.camera.targetDistance, scale: tiers.tier.cameraScale };
+      player.mass = allTiers[tierIndex].minMass - 0.02;
+      for (let i = 0; i < 600 && Math.abs(player.radius - player.radiusForMass()) > 0.01 * player.radius; i++) await nextFrame();
+      if (tiers.index !== tierIndex - 1) throw new Error('crossed the threshold early');
+
+      // Park on the biggest edible object that is heavy enough to finish the job.
+      let target: (typeof prey.objects)[number] | undefined;
+      for (const o of prey.objects.slice(0, tiers.tier.count)) {
+        if (o.state === 'alive' && prey.isEdible(o) && o.mass > 0.02 && (!target || o.radius > target.radius)) target = o;
+      }
+      if (!target) throw new Error('no edible prey to cross the threshold with');
+      const eaten = { name: target.className, radius: target.radius };
+      player.velocity.x = player.velocity.z = 0;
+      player.position.x = target.position.x;
+      player.position.z = target.position.z;
+      for (let i = 0; i < 120 && tiers.index !== tierIndex; i++) await nextFrame();
+      if (tiers.index !== tierIndex) throw new Error('tier did not change');
+
+      // The set piece dips game time, then the view settles on the new scale.
+      await nextFrame();
+      await nextFrame();
+      const dip = tiers.timeScale;
+      const live = prey.objects.slice(0, tiers.tier.count);
+      const minRadius = Math.min(...allTiers[tierIndex].classes.map((c) => c.radius[0]));
+      const tooSmall = live.filter((o) => o.state === 'alive' && o.radius < minRadius).length;
+      return {
+        before,
+        after: { count: tiers.tier.count, distance: d.camera.targetDistance, scale: tiers.tier.cameraScale },
+        dip,
+        tooSmall,
+        title: tiers.tier.title,
+        eaten,
+        biggest: player.biggestEaten,
+        banner: document.querySelector('[data-testid="tier-banner"]')?.textContent ?? '',
+      };
+    }, tierIndex);
+
+  for (const tierIndex of [1, 2]) {
+    const r = await crossInto(tierIndex);
+    // New scene scale: the camera heads further out than it was.
+    expect(r.after.scale).toBeGreaterThan(r.before.scale);
+    expect(r.after.distance).toBeGreaterThan(r.before.distance);
+    // Slow motion during the set piece.
+    expect(r.dip).toBeLessThan(1);
+    // New prey table: nothing left from the old table that the new one does not have.
+    expect(r.tooSmall).toBe(0);
+    expect(r.biggest?.radius).toBeGreaterThanOrEqual(r.eaten.radius);
+    expect(r.banner).toContain(r.title);
+    // Let the slow motion pass before the next climb.
+    await page.waitForFunction(() => window.__spaghettify.tiers.timeScale === 1);
+  }
+
+  // The new prey table is what spawns now: wait for respawns and check every live object fits a table.
+  const final = await page.evaluate(() => {
+    const { prey, tiers, allTiers } = window.__spaghettify;
+    const classes = allTiers[tiers.index].classes;
+    const lo = Math.min(...classes.map((c) => c.radius[0]));
+    const hi = Math.max(...classes.map((c) => c.radius[1]));
+    const live = prey.objects.slice(0, tiers.tier.count);
+    return { index: tiers.index, count: live.length, outside: live.filter((o) => o.state === 'alive' && (o.radius < lo || o.radius > hi)).length };
+  });
+  expect(final.index).toBe(2);
+  expect(final.outside).toBe(0);
+
+  expect(errors).toEqual([]);
+});
+
+test('speed holds on screen as the hole grows', async ({ page }) => {
+  test.setTimeout(120_000);
+  // Small viewport: software rendering is slow and this test only needs frames to tick.
+  await page.setViewportSize({ width: 480, height: 270 });
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await page.mouse.move(470, 135);
+
+  // Top speed in world units per second, and the view scale it should follow.
+  const run = (mass: number) =>
+    page.evaluate(async (mass) => {
+      const d = window.__spaghettify;
+      const { player } = d;
+      d.renderer.lensing.setQuality(0);
+      player.mass = mass;
+      let top = 0;
+      for (let i = 0; i < 160; i++) {
+        const f = d.frames;
+        while (d.frames === f) await new Promise(requestAnimationFrame);
+        if (i > 100) top = Math.max(top, Math.hypot(player.velocity.x, player.velocity.z));
+      }
+      return { speed: top, view: d.camera.viewScale };
+    }, mass);
+
+  const small = await run(0.25);
+  const big = await run(100);
+  expect(big.view).toBeGreaterThan(small.view * 2);
+  // On-screen speed (world speed over view distance) stays within 25 percent however big the hole is.
+  const ratio = big.speed / big.view / (small.speed / small.view);
+  expect(ratio).toBeGreaterThan(0.75);
+  expect(ratio).toBeLessThan(1.25);
 });

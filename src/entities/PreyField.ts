@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { DISK, PREY, SPAGHETTI } from '../config';
+import { DISK, PREY, PREY_POOL_SIZE, SPAGHETTI, tierMinRadius, type PreyClass, type Tier } from '../config';
 import { massOfRadius, type Player } from '../player/Player';
 import { createPreyMaterial, type PreyUniforms } from './preyMaterial';
 
@@ -11,6 +11,8 @@ export interface PreyObject {
   readonly velocity: THREE.Vector3;
   radius: number;
   mass: number;
+  /** Name of the tier-table class this object was drawn from, e.g. "asteroid". */
+  className: string;
   state: PreyState;
   /** 0..1 scale-in after (re)spawning. */
   appear: number;
@@ -42,8 +44,14 @@ const tmpColor = new THREE.Color();
 const tmpOffset = new THREE.Vector3();
 const UP = new THREE.Vector3(0, 1, 0);
 
+/** What the field needs to know about the camera: how far it is heading to be. Spawn distances are fractions of it. */
+export interface ViewSource {
+  readonly targetDistance: number;
+}
+
 /**
- * Placeholder prey: a fixed pool of rocks drawn as one InstancedMesh. Tiers and real spawning arrive in M5.
+ * Prey: a fixed pool of rocks drawn as one InstancedMesh. What spawns comes from the current tier's absolute
+ * prey table and entity budget (the first `tier.count` slots are live); spawn distances scale with the view.
  * Edible prey spaghettify: they stretch toward the hole as it gets close, and when eaten they fall in,
  * stretching into a thin spiralling stream that drains into the core (see preySpaghettify.pars.vert.glsl).
  */
@@ -56,27 +64,36 @@ export class PreyField {
   private readonly glowAttr: THREE.InstancedBufferAttribute;
   private readonly uniforms: PreyUniforms;
 
-  constructor(private readonly player: Player) {
+  private tier: Tier;
+
+  constructor(
+    private readonly player: Player,
+    private readonly view: ViewSource,
+    tier: Tier,
+  ) {
+    this.tier = tier;
     const geometry = createRockGeometry();
-    this.stretchAttr = new THREE.InstancedBufferAttribute(new Float32Array(PREY.count * 4), 4);
+    this.stretchAttr = new THREE.InstancedBufferAttribute(new Float32Array(PREY_POOL_SIZE * 4), 4);
     this.stretchAttr.setUsage(THREE.DynamicDrawUsage);
-    this.glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(PREY.count), 1);
+    this.glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(PREY_POOL_SIZE), 1);
     this.glowAttr.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute('aStretch', this.stretchAttr);
     geometry.setAttribute('aGlow', this.glowAttr);
 
     const { material, uniforms } = createPreyMaterial();
     this.uniforms = uniforms;
-    this.mesh = new THREE.InstancedMesh(geometry, material, PREY.count);
+    this.mesh = new THREE.InstancedMesh(geometry, material, PREY_POOL_SIZE);
+    this.mesh.count = tier.count;
     this.mesh.frustumCulled = false;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 
-    for (let i = 0; i < PREY.count; i++) {
+    for (let i = 0; i < PREY_POOL_SIZE; i++) {
       const obj: PreyObject = {
         position: new THREE.Vector3(),
         velocity: new THREE.Vector3(),
         radius: 1,
         mass: 1,
+        className: '',
         state: 'alive',
         appear: 1,
         eatProgress: 0,
@@ -107,16 +124,34 @@ export class PreyField {
     return Math.min(1, obj.radius / (this.player.radius * PREY.edibleRatio)) ** SPAGHETTI.sizePower;
   }
 
+  /** The live tier. Slots beyond the old budget join and leftovers too small for the new table are refilled across the view. */
+  setTier(tier: Tier): void {
+    const oldCount = this.tier.count;
+    this.tier = tier;
+    this.mesh.count = tier.count;
+    const minRadius = tierMinRadius(tier);
+    for (let i = 0; i < tier.count; i++) {
+      const obj = this.objects[i];
+      if (i >= oldCount || (obj.state === 'alive' && obj.radius < minRadius)) {
+        this.respawn(i, PREY.initialInner, PREY.initialOuter, true);
+        this.writeInstance(i, obj);
+      }
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this.stretchAttr.needsUpdate = true;
+  }
+
   update(dt: number): void {
     const player = this.player;
     const pr = player.radius;
-    const despawnSq = (PREY.despawnDistance * pr) ** 2;
-    const respawnSq = (PREY.respawnInner * pr) ** 2;
-    // Leftovers the player has outgrown are recycled once they are off screen.
-    const staleRadius = pr * PREY.sizeRelMin * PREY.staleRatio;
+    const view = this.view.targetDistance;
+    const despawnSq = (PREY.despawnDistance * view) ** 2;
+    const respawnSq = (PREY.respawnInner * view) ** 2;
+    // Specks the player has outgrown are recycled once they are off screen.
+    const staleRadius = pr * PREY.minRelSize;
     this.uniforms.uHole.value.set(player.position.x, player.position.z, pr);
 
-    for (let i = 0; i < this.objects.length; i++) {
+    for (let i = 0; i < this.tier.count; i++) {
       const obj = this.objects[i];
 
       if (obj.state === 'eating') {
@@ -144,7 +179,7 @@ export class PreyField {
             obj.infallWeight = this.sizeWeight(obj);
             obj.infallTime = lerp(SPAGHETTI.infallTimeMin, SPAGHETTI.infallTimeMax, obj.infallWeight);
             obj.stretchFrom = obj.stretch;
-            player.eat(obj.mass);
+            player.eat(obj.mass, { name: obj.className, radius: obj.radius });
           }
         }
       }
@@ -209,12 +244,14 @@ export class PreyField {
     obj.dirZ = dz / len;
   }
 
-  /** Reuse pool slot i as a fresh object in an annulus around the player (radii are in player radii). */
+  /** Reuse pool slot i as a fresh object from the current tier's table in an annulus around the player (distances are in camera distances). */
   private respawn(i: number, innerRel: number, outerRel: number, animate: boolean): void {
     const obj = this.objects[i];
     const pr = this.player.radius;
+    const view = this.view.targetDistance;
 
-    obj.radius = pr * logUniform(PREY.sizeRelMin, PREY.sizeRelMax);
+    const cls = this.pickClass(pr * PREY.minRelSize, obj);
+    obj.className = cls.name;
     obj.mass = massOfRadius(obj.radius);
     obj.state = 'alive';
     obj.appear = animate ? 0 : 1;
@@ -222,8 +259,8 @@ export class PreyField {
     obj.stretch = 1;
 
     // Uniform over the annulus area. Keep clear of the player so spawning never overlaps it.
-    const minDist = Math.max(innerRel * pr, pr + obj.radius * 1.5);
-    const maxDist = Math.max(outerRel * pr, minDist + pr);
+    const minDist = Math.max(innerRel * view, pr + obj.radius * 1.5);
+    const maxDist = Math.max(outerRel * view, minDist + pr);
     const dist = Math.sqrt(minDist * minDist + Math.random() * (maxDist * maxDist - minDist * minDist));
     const angle = Math.random() * Math.PI * 2;
     obj.position.set(
@@ -233,7 +270,7 @@ export class PreyField {
     );
 
     const driftAngle = Math.random() * Math.PI * 2;
-    const drift = Math.random() * PREY.driftSpeed * pr;
+    const drift = Math.random() * PREY.driftSpeed * view;
     obj.velocity.set(Math.cos(driftAngle) * drift, 0, Math.sin(driftAngle) * drift);
 
     obj.spinAxis.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
@@ -242,13 +279,39 @@ export class PreyField {
     obj.spinAngle = Math.random() * Math.PI * 2;
     obj.spinSpeed = (Math.random() * 2 - 1) * PREY.spinSpeed;
 
+    const { hue, sat, light } = cls.color;
     tmpColor.setHSL(
-      lerp(PREY.hueMin, PREY.hueMax, Math.random()),
-      lerp(PREY.satMin, PREY.satMax, Math.random()),
-      lerp(PREY.lightMin, PREY.lightMax, Math.random()),
+      lerp(hue[0], hue[1], Math.random()),
+      lerp(sat[0], sat[1], Math.random()),
+      lerp(light[0], light[1], Math.random()),
     );
     this.mesh.setColorAt(i, tmpColor);
     if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  }
+
+  /**
+   * Draw a class by weight and a radius within it, and store the radius on `obj`. Samples below
+   * `minRadius` (specks next to the current player) are redrawn a few times so the screen stays full of useful prey.
+   */
+  private pickClass(minRadius: number, obj: PreyObject): PreyClass {
+    const classes = this.tier.classes;
+    let total = 0;
+    for (const c of classes) total += c.weight;
+    let cls = classes[0];
+    for (let attempt = 0; attempt < 8; attempt++) {
+      let roll = Math.random() * total;
+      cls = classes[classes.length - 1];
+      for (const c of classes) {
+        roll -= c.weight;
+        if (roll <= 0) {
+          cls = c;
+          break;
+        }
+      }
+      obj.radius = logUniform(cls.radius[0], cls.radius[1]);
+      if (obj.radius >= minRadius) break;
+    }
+    return cls;
   }
 }
 

@@ -3,8 +3,17 @@ import { STARFIELD } from '../config';
 import vert from '../shaders/starfield.vert.glsl';
 import frag from '../shaders/starfield.frag.glsl';
 
-/** Static stars scattered below the play plane so movement reads through parallax. */
-export function createStarfield(): THREE.Points {
+export interface Starfield {
+  readonly points: THREE.Points;
+  /** `centre` is the player's position; `scale` the view scale (camera distance over its starting distance). */
+  update(centre: THREE.Vector3, scale: number): void;
+}
+
+/**
+ * Stars scattered below the play plane so movement reads through parallax. The field is wrapped around
+ * the player and scales with the view, so there are stars at every zoom level and however far you travel.
+ */
+export function createStarfield(): Starfield {
   const n = STARFIELD.count;
   const pos = new Float32Array(n * 3);
   const size = new Float32Array(n);
@@ -20,7 +29,13 @@ export function createStarfield(): THREE.Points {
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('aSize', new THREE.BufferAttribute(size, 1));
   geo.setAttribute('aBright', new THREE.BufferAttribute(bright, 1));
+  const uniforms = {
+    uCentre: { value: new THREE.Vector2() },
+    uScale: { value: 1 },
+    uExtent: { value: STARFIELD.extent },
+  };
   const mat = new THREE.ShaderMaterial({
+    uniforms,
     vertexShader: vert,
     fragmentShader: frag,
     transparent: true,
@@ -35,5 +50,11 @@ export function createStarfield(): THREE.Points {
   });
   const points = new THREE.Points(geo, mat);
   points.frustumCulled = false;
-  return points;
+  return {
+    points,
+    update(centre, scale) {
+      uniforms.uCentre.value.set(centre.x, centre.z);
+      uniforms.uScale.value = scale;
+    },
+  };
 }

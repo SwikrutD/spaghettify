@@ -6,7 +6,7 @@ import { AccretionDisk } from './AccretionDisk';
 
 /** Mass of a sphere-ish body of the given radius. Shared by the player and prey so eating is consistent. */
 export function massOfRadius(radius: number): number {
-  return GROWTH.massDensity * radius * radius * radius;
+  return GROWTH.massDensity * Math.pow(radius, GROWTH.massExponent);
 }
 
 /**
@@ -23,6 +23,8 @@ export class Player {
   /** Total mass eaten this run. */
   eatenMass = 0;
   eatenCount = 0;
+  /** Biggest thing eaten this run. */
+  biggestEaten: { name: string; radius: number } | null = null;
   readonly disk = new AccretionDisk();
   private readonly startMass = this.mass;
 
@@ -38,10 +40,12 @@ export class Player {
     this.applyRadius();
   }
 
-  update(dt: number, move: MoveVector): void {
+  /** `viewScale` is the camera distance as a multiple of its starting distance: speed follows it so the on-screen speed holds. */
+  update(dt: number, move: MoveVector, viewScale: number): void {
+    const maxSpeed = PLAYER.maxSpeed * Math.pow(viewScale, PLAYER.speedExponent);
     // Screen up maps to -Z on the play plane.
-    const tx = move.x * PLAYER.maxSpeed;
-    const tz = -move.y * PLAYER.maxSpeed;
+    const tx = move.x * maxSpeed;
+    const tz = -move.y * maxSpeed;
     const k = 1 - Math.exp(-PLAYER.responsiveness * dt);
     this.velocity.x += (tx - this.velocity.x) * k;
     this.velocity.z += (tz - this.velocity.z) * k;
@@ -54,7 +58,8 @@ export class Player {
   }
 
   /** Absorb a prey object of the given mass. */
-  eat(preyMass: number): void {
+  eat(preyMass: number, what?: { name: string; radius: number }): void {
+    if (what && (!this.biggestEaten || what.radius > this.biggestEaten.radius)) this.biggestEaten = what;
     const gained = preyMass * GROWTH.absorbEfficiency;
     this.mass += gained;
     this.eatenMass += gained;
