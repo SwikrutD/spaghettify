@@ -43,6 +43,12 @@ export class TierBanner {
     this.hideAt = performance.now() + TIER_UP.bannerTime * 1000;
   }
 
+  /** Hide at once (new run). */
+  reset(): void {
+    this.bannerEl.style.opacity = '0';
+    this.hideAt = 0;
+  }
+
   update(flash: number): void {
     this.flashEl.style.opacity = String(flash * TIER_UP.flashPeak);
     if (this.hideAt && performance.now() > this.hideAt) {

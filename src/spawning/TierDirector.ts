@@ -36,6 +36,12 @@ export class TierDirector {
     return smoothstep(0, 0.03, this.since) * Math.exp(-this.since / TIER_UP.flashDecay);
   }
 
+  /** Start of a new run: back to the first tier with no set piece playing. */
+  reset(): void {
+    this.index = 0;
+    this.since = Infinity;
+  }
+
   update(realDt: number, mass: number): void {
     this.since += realDt;
     const next = tierIndexForMass(mass);

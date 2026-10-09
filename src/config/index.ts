@@ -34,6 +34,37 @@ export const GROWTH = {
   radiusSmoothing: 5,
 } as const;
 
+/**
+ * Hunger: Hawking radiation as the fail state. Go too long without eating and the hole slowly evaporates
+ * (mass drains); when mass reaches the floor the run ends. Times are in game seconds unless noted.
+ */
+export const HUNGER = {
+  /** Seconds since the last meal before mass starts to drain. */
+  graceTime: 7,
+  /** Seconds since the last meal when the warning starts to build (before the drain begins). */
+  warnTime: 3.5,
+  /** Fraction of mass lost per second once the drain is at full strength. */
+  decayRate: 0.09,
+  /** Seconds for the drain to ramp from zero to full strength after the grace time. */
+  rampTime: 2,
+  /** The run ends when mass falls to max(failMass, runPeakMass * failPeakFraction). */
+  failMass: 0.1,
+  failPeakFraction: 0.5,
+  /** Real seconds of the final evaporation before the score screen, and how fast mass drains in it (1/s). */
+  evaporateTime: 1.8,
+  evaporateRate: 1.6,
+  /** The evaporating hole shrinks to this fraction of the fail mass and no further. */
+  evaporateFloorFraction: 0.4,
+  /** How quickly the displayed hunger level follows the real one (1/s). */
+  levelRate: 4,
+  /** The warning text shows above this hunger level (0..1). */
+  warnTextLevel: 0.3,
+  /** Screen vignette opacity at full hunger. */
+  vignetteMax: 0.9,
+  /** Score points per unit of mass eaten (mass is an area, so raw values are small early on). */
+  pointsPerMass: 1000,
+} as const;
+
 export const PREY = {
   /** Player can eat an object whose radius is below this fraction of its own radius. */
   edibleRatio: 0.95,
@@ -192,6 +223,8 @@ export const DISK = {
   /** How fast the displayed heat rises and falls (1/s). Fast flare, slow cool. */
   heatRise: 6,
   heatFall: 1.2,
+  /** Starving dims the disk: brightness and ring intensity are multiplied by 1 - starveDim * hunger. */
+  starveDim: 0.8,
 } as const;
 
 export const PHOTON_RING = {

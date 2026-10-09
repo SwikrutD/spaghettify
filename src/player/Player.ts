@@ -23,6 +23,8 @@ export class Player {
   /** Total mass eaten this run. */
   eatenMass = 0;
   eatenCount = 0;
+  /** False once the run is lost: the hole no longer eats while it evaporates. */
+  canEat = true;
   /** Biggest thing eaten this run. */
   biggestEaten: { name: string; radius: number } | null = null;
   readonly disk = new AccretionDisk();
@@ -55,6 +57,19 @@ export class Player {
     const target = this.radiusForMass();
     this.setRadius(this.radius + (target - this.radius) * (1 - Math.exp(-GROWTH.radiusSmoothing * dt)));
     this.disk.update(dt, this.eatenMass / this.startMass);
+  }
+
+  /** Back to a fresh run at the origin. */
+  reset(): void {
+    this.mass = this.startMass;
+    this.eatenMass = 0;
+    this.eatenCount = 0;
+    this.canEat = true;
+    this.biggestEaten = null;
+    this.position.set(0, 0, 0);
+    this.velocity.set(0, 0, 0);
+    this.disk.reset();
+    this.setRadius(PLAYER.startRadius);
   }
 
   /** Absorb a prey object of the given mass. */

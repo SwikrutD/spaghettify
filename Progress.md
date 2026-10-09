@@ -1,17 +1,17 @@
 # Progress - Spaghettify
 
 ## Next session
-M6 Hunger / Hawking evaporation fail state and score screen. Recommended: Sonnet 5.5, medium (per milestone list). Playtest M5 first if you have not, and report tweaks to `GROWTH`, `PREY`, `TIERS` (src/config/tiers.ts), `CAMERA`, `PLAYER`, `DISK`.
+M7 part 1: Web Audio (ambient drone reacting to size and hunger, synthesized SFX: eat, grow, tier-up, danger, evaporate) plus the music and SFX volume sliders and a mute toggle. Recommended: Sonnet 5.5, medium (per milestone list; M7 is split into audio first, then title/pause/settings UI and mobile controls, because it is too big for one segment). Playtest M6 first and report tweaks to `HUNGER` (src/config/index.ts).
 How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste the start prompt below.
 
 ```
-Start Milestone 6 (Hunger / Hawking evaporation fail state and score screen) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 7 part 1 (audio) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: if the player goes too long without eating they slowly lose mass (Hawking radiation) and the run ends when mass falls to a floor. Tunables go in a new HUNGER block in src/config (grace time, decay rate, fail mass). Show a hunger warning before it gets bad (simple and on theme, for example the disk dims and a small vignette or text). At run end show a score screen: score = mass eaten, biggest object eaten (player.biggestEaten, class names are already correct), tier reached, a milestone ladder line such as "You ate a moon", and a play again button that resets the run cleanly (player, prey pool, tier director, camera). The tier is monotonic today (TierDirector never goes down); keep it that way unless you decide otherwise and log why. Keep prey rendering through createPreyMaterial (layer 0, opaque, alpha 1). Player-facing copy: no em dashes, no serial commas, ASCII quotes.
+Goal: Web Audio API only, no asset files. An ambient drone that reacts to hole size (tier or radius) and to hunger (Hunger.level / HungerOverlay.level), plus synthesized SFX for eat (pitch by prey size), grow, tier-up (hook TierDirector.onTierUp), danger/hunger warning and evaporate (Hunger.onEnd / phase 'evaporating'). Separate music and SFX gain nodes with volume sliders and a mute toggle, persisted in localStorage (try/catch). Audio must start after the first user gesture. Put tunables in a new AUDIO block in src/config. Code goes under src/audio/. Do not build the title screen, pause menu or mobile controls (later M7 parts). Player-facing copy: no em dashes, no serial commas, ASCII quotes.
 
-Known: Player.mass only goes up today; Player.update chases radiusForMass(), so shrinking works once mass drops. DISK heat should dim when starving (see Decisions log). The tier-up set piece (TierDirector) runs on real time and slows game time with timeScale, so the run-end screen must not fight it. The debug handle window.__spaghettify exposes player, prey, tiers, camera and renderer.
+Hooks that exist: window.__spaghettify exposes player, prey, tiers, hunger, hungerOverlay, camera, renderer. Player.eat(mass, what) is the eat event, Hunger.phase is 'playing' | 'evaporating' | 'over', ScoreScreen.onRestart restarts the run.
 
-Done when: a run can be lost to hunger and restarted, the score screen shows the stats above, and tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test) with the eating, spaghettify and tier-up tests still green. Add a smoke test for the fail state and restart. Update Progress.md and commit at the end.
+Done when: sound plays for each event in a manual check, no console errors with audio blocked or unavailable, and tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test). Add a smoke test that the audio context is created after a click and the mute toggle works. Update Progress.md and commit at the end.
 ```
 
 ## Milestones
@@ -23,8 +23,8 @@ Suggested model/effort in brackets.
 - [x] M3 Gravitational lensing shader [Opus 5.5, xhigh] (2026-10-09, awaiting user playtest)
 - [x] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high] (2026-10-09, awaiting user playtest)
 - [x] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
-- [ ] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium]
-- [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium]
+- [x] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest)
+- [ ] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (split: part 1 audio, part 2 title/pause/settings, part 3 mobile controls and juice)
 - [ ] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high]
 - [ ] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium]
 - [ ] Post-MVP: more tiers, daily seed, leaderboard, multiplayer
@@ -90,6 +90,15 @@ Suggested model/effort in brackets.
   - Smoke tests 5 and 6: crossing each threshold by eating (mass set just under the threshold) changes the tier, raises the camera scale and target distance, dips `timeScale`, leaves no live prey below the new table's minimum, records `biggestEaten` and shows the banner; the final live prey all fit tier 3's table. On-screen speed stays within 25 percent between mass 0.25 and 100. Both use a small viewport (SwiftShader is slow).
   - Judged by screenshot on the real GPU (`--use-angle=d3d11`, 60 fps at 1280x720 at all tiers): the hole core grows from about 16 percent of screen height at the start to about 22 to 25 percent and steps back at each tier pull-back; prey table and colours change per tier. Feel in motion, pacing and the set piece have not been judged by a human.
 
+- 2026-10-09 M6: hunger fail state and score screen.
+  - `HUNGER` block in `src/config/index.ts`: `graceTime` 7 s, `warnTime` 3.5, `decayRate` 0.09 per second (ramps in over `rampTime` 2), floor = max(`failMass` 0.1, run peak mass x `failPeakFraction` 0.5), `evaporateTime` 1.8 s real, `pointsPerMass` 1000. `DISK.starveDim` 0.8.
+  - `src/player/Hunger.ts`: phases `playing` > `evaporating` > `over`. Eating (eatenCount change) resets `idle`. After the grace time mass decays exponentially. At the floor the hole evaporates for `evaporateTime` real seconds (input off, eating off via `player.canEat`, mass drains to 0.4 x floor so the camera never hits radius 0), then `onEnd` shows the score screen. `level` 0..1 (time-based warning up to 0.4, then follows progress to the floor). `enabled` flag for tests.
+  - `src/ui/HungerOverlay.ts`: red vignette plus "HAWKING RADIATION: EAT" / "EVAPORATING" text driven by a smoothed level. `player.disk.starvation` follows that level and dims disk brightness and the photon ring.
+  - `src/ui/ScoreScreen.ts` + `milestones.ts`: score (eatenMass x 1000), best (localStorage `spaghettify.best`), ladder line from `biggestEaten` ("You ate a moon"), tier reached, objects eaten, time, PLAY AGAIN (button or Enter).
+  - Restart (`main.ts`): `player.reset()`, `tiers.reset()`, `gameCamera.reset()`, `prey.reset(tier)` (refills the whole pool, camera first), `hunger.reset()`, overlay and banner reset.
+  - Smoke test 7: eat, skip the grace period, mass drains and the warning and disk dimming show, push to the floor, score screen stats match the debug handle, PLAY AGAIN gives a fresh run that can eat. The tier and speed tests set `hunger.enabled = false`. Also made test 2 robust (big object must be over 2x the player radius).
+  - Not judged by a human: vignette look, disk dimming, pacing of the drain, the score screen layout.
+
 ## In progress
 (nothing)
 
@@ -121,6 +130,11 @@ Suggested model/effort in brackets.
 - 2026-10-09: Tier never goes back down (monotonic) so shedding mass cannot replay the set piece. Revisit in M6 if hunger shrinking should drop tiers.
 - 2026-10-09: Tier set piece = camera pull-back punch + 0.9 s slow-mo + white flash + banner, all driven by one `TierDirector` on real time. The prey refill at tier-up happens under the flash so nothing visibly pops.
 
+- 2026-10-09: Tier stays monotonic when hunger shrinks the hole (a tier is "reached", and going back down would replay the set piece). The score screen reports the highest tier reached.
+- 2026-10-09: The fail floor is relative to the run's peak mass (half of it) so starving matters at every size; an absolute floor alone would take a minute to hit at planet mass. Mass lost to hunger is never regained, so the floor only moves up.
+- 2026-10-09: Score = mass eaten x 1000 so the first meals (dust grains of mass 0.0025) still count.
+- 2026-10-09: Hunger runs on game time (so it pauses in tier-up slow motion); the final evaporation runs on real time.
+
 ## Known bugs
 - Spaghetti: a prey eaten with its centre exactly on the hole (only happens with debug teleports) stretches along its last direction and half of it shows on one side until it drains.
 - Spaghetti: a stream behind the hole is lifted by the lens and wraps along the shadow edge instead of visibly entering the core. Looks like a photon-ring wrap; judge in playtest.
@@ -134,11 +148,11 @@ Suggested model/effort in brackets.
 - Tiers: thresholds (mass 9 and 400), counts (80, 70, 60) and class weights are set from numbers and stills only. The early game may be sparse or a tier too short or long; tune `TIERS` after a playtest.
 - Tests: SwiftShader runs about 3 to 5 fps at 1280x720 with the lens on, so the tier and speed tests use a small viewport. For real performance numbers or screenshots, a scratch spec with `launchOptions.args: ['--use-angle=d3d11', '--ignore-gpu-blocklist']` uses the GPU.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
-- Smoke test "bigger object not eaten" can in theory flake if the player grows enough from a stray meal during its 300 ms window.
 - Disk fill cost: 3 layers x 2 flow phases x 3 noise octaves per pixel. Fine on desktop; unverified on a phone. M8 can drop `DISK.layers` or `noiseOctaves` per quality level.
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 
 ## Open questions
+- Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. No pause menu yet, so a tab left idle in the background still evaporates (frames are capped at 0.05 s per frame, so it is slow when hidden).
 - Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
 - Not yet playtested on a phone (no touch input until M7). Lens cost on a phone unknown; drop it to quality 1 first.
 - Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?

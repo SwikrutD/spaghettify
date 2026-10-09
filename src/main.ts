@@ -1,14 +1,17 @@
 import * as THREE from 'three';
-import { LIGHTING, RENDER, TIERS } from './config';
+import { HUNGER, LIGHTING, RENDER, TIERS } from './config';
 import { PreyField } from './entities/PreyField';
 import { InputManager } from './input/InputManager';
 import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
+import { Hunger } from './player/Hunger';
 import { Player } from './player/Player';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
 import { createStarfield } from './scene/Starfield';
 import { TierDirector } from './spawning/TierDirector';
+import { HungerOverlay } from './ui/HungerOverlay';
+import { ScoreScreen } from './ui/ScoreScreen';
 import { TierBanner } from './ui/TierBanner';
 
 const canvas = document.getElementById('game') as HTMLCanvasElement;
@@ -30,6 +33,55 @@ tiers.onTierUp = (tier, index) => {
   prey.setTier(tier);
   banner.show(index + 1, tier.title);
 };
+const hunger = new Hunger(player);
+const hungerOverlay = new HungerOverlay();
+const scoreScreen = new ScoreScreen();
+
+const BEST_KEY = 'spaghettify.best';
+function loadBest(): number {
+  try {
+    return Number(localStorage.getItem(BEST_KEY)) || 0;
+  } catch {
+    return 0;
+  }
+}
+function saveBest(score: number): void {
+  try {
+    localStorage.setItem(BEST_KEY, String(score));
+  } catch {
+    // Storage can be blocked; the best score is a convenience.
+  }
+}
+
+// Run over: score = mass eaten (scaled to points), shown with the biggest meal and the tier reached.
+hunger.onEnd = () => {
+  const score = Math.round(player.eatenMass * HUNGER.pointsPerMass);
+  const previous = loadBest();
+  const newBest = score > previous;
+  if (newBest) saveBest(score);
+  scoreScreen.show({
+    score,
+    best: Math.max(score, previous),
+    newBest,
+    biggest: player.biggestEaten,
+    tierNumber: tiers.index + 1,
+    tierTitle: tiers.tier.title,
+    eatenCount: player.eatenCount,
+    seconds: hunger.runTime,
+  });
+};
+
+// Fresh run: player, tier, camera, prey pool, hunger and overlays. The camera resets before the prey (spawn distances follow it).
+scoreScreen.onRestart = () => {
+  player.reset();
+  tiers.reset();
+  gameCamera.reset(player.position, player.radius, tiers.tier.cameraScale);
+  prey.reset(tiers.tier);
+  hunger.reset();
+  hungerOverlay.reset();
+  banner.reset();
+};
+
 const renderer = new Renderer(canvas, scene, gameCamera.camera, player);
 const input = new InputManager([new KeyboardInput(), new MouseInput(canvas)]);
 
@@ -49,6 +101,8 @@ const debug = {
   player,
   prey,
   tiers,
+  hunger,
+  hungerOverlay,
   allTiers: TIERS,
   camera: gameCamera,
   renderer,
@@ -57,6 +111,7 @@ const debug = {
 };
 (window as unknown as { __spaghettify: typeof debug }).__spaghettify = debug;
 
+const NO_MOVE = { x: 0, y: 0 };
 let last = performance.now();
 function frame(now: number): void {
   const realDt = Math.min((now - last) / 1000, RENDER.maxFrameDt);
@@ -65,7 +120,12 @@ function frame(now: number): void {
   tiers.update(realDt, player.mass);
   // Game time dips into slow motion during the tier-up; the camera and overlays run on real time.
   const dt = realDt * tiers.timeScale;
-  player.update(dt, input.move, gameCamera.viewScale);
+  // Input only steers while the run is live; during and after the evaporation the hole just drifts.
+  player.update(dt, hunger.phase === 'playing' ? input.move : NO_MOVE, gameCamera.viewScale);
+  hunger.update(dt, realDt);
+  player.canEat = hunger.phase === 'playing';
+  hungerOverlay.update(realDt, hunger.level);
+  player.disk.starvation = hungerOverlay.level;
   prey.update(dt);
   gameCamera.punch = tiers.punch;
   gameCamera.update(realDt, player.position, player.radius);

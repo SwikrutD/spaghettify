@@ -23,6 +23,8 @@ export class AccretionDisk {
   heat = 0;
   /** Recent accretion rate. Jumps on each meal, decays over time. */
   activity = 0;
+  /** 0..1 hunger level; dims the disk and ring (Hawking evaporation). */
+  starvation = 0;
   private time = 0;
   private readonly diskUniforms;
   private readonly ringUniforms;
@@ -113,6 +115,13 @@ export class AccretionDisk {
     this.activity += massFraction * DISK.feedGain;
   }
 
+  reset(): void {
+    this.heat = 0;
+    this.activity = 0;
+    this.starvation = 0;
+    this.applyHeat();
+  }
+
   /** `growthRatio` is eatenMass / startMass. */
   update(dt: number, growthRatio: number): void {
     this.time += dt;
@@ -137,9 +146,10 @@ export class AccretionDisk {
     u.uOuter.value = lerp(DISK.outerRadiusMin, DISK.outerRadiusMax, h);
     u.uThickness.value = lerp(DISK.thicknessMin, DISK.thicknessMax, h);
     u.uPeakKelvin.value = lerp(DISK.peakKelvinMin, DISK.peakKelvinMax, h);
-    u.uBrightness.value = lerp(DISK.brightnessMin, DISK.brightnessMax, h);
+    const dim = 1 - DISK.starveDim * this.starvation;
+    u.uBrightness.value = lerp(DISK.brightnessMin, DISK.brightnessMax, h) * dim;
 
-    this.ringUniforms.uIntensity.value = lerp(PHOTON_RING.intensityMin, PHOTON_RING.intensityMax, h);
+    this.ringUniforms.uIntensity.value = lerp(PHOTON_RING.intensityMin, PHOTON_RING.intensityMax, h) * dim;
     this.ringUniforms.uColor.value.copy(blackbodyColor(u.uPeakKelvin.value * PHOTON_RING.kelvinFactor, tmpColor));
   }
 }

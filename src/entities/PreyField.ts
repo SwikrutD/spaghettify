@@ -141,6 +141,19 @@ export class PreyField {
     this.stretchAttr.needsUpdate = true;
   }
 
+  /** Start of a new run: refill the whole pool across the view from the given tier's table. */
+  reset(tier: Tier): void {
+    this.tier = tier;
+    this.mesh.count = tier.count;
+    for (let i = 0; i < PREY_POOL_SIZE; i++) {
+      this.respawn(i, PREY.initialInner, PREY.initialOuter, false);
+      this.writeInstance(i, this.objects[i]);
+    }
+    this.mesh.instanceMatrix.needsUpdate = true;
+    this.stretchAttr.needsUpdate = true;
+    this.glowAttr.needsUpdate = true;
+  }
+
   update(dt: number): void {
     const player = this.player;
     const pr = player.radius;
@@ -170,7 +183,7 @@ export class PreyField {
         const outOfSight = distSq > respawnSq;
         if (distSq > despawnSq || (outOfSight && obj.radius < staleRadius)) {
           this.respawn(i, PREY.respawnInner, PREY.respawnOuter, true);
-        } else if (this.isEdible(obj)) {
+        } else if (player.canEat && this.isEdible(obj)) {
           const reach = pr + obj.radius * PREY.eatReach;
           if (distSq < reach * reach) {
             obj.state = 'eating';

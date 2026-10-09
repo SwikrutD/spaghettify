@@ -30,6 +30,16 @@ export class GameCamera {
     this.place();
   }
 
+  /** Snap back to a fresh run (no easing). */
+  reset(target: THREE.Vector3, radius: number, tierScale: number): void {
+    this.punch = 0;
+    this.radius = radius;
+    this.radiusDistance = radiusDistance(radius);
+    this.tierScale = this.tierScaleTarget = tierScale;
+    this.focus.copy(target);
+    this.place();
+  }
+
   /** The distance the camera is heading for (no tier-up punch). Spawning and despawning are sized from this. */
   get targetDistance(): number {
     return radiusDistance(this.radius) * this.tierScaleTarget;
