@@ -1,39 +1,38 @@
 # Progress - Spaghettify
 
 ## Next session
-M13 part 1 (round bodies, portrait FOV floor) is done. The tuning part was not done: the start prompt still had the `<paste notes>` placeholder, so there were no playtest notes to tune from.
+Direction change (2026-10-09, see Decisions): the game becomes an endless drop-in arena with bot black holes and online players that eat each other (hole.io / slither.io). CLAUDE.md is updated. M13 part 2 (number tuning) is dropped; its tuning folds into the arena milestones.
 
-Before it, the user deploys (`deploy/DEPLOY.md`), fills in the Umami website id and playtests on a desktop and a phone: pull, hits (blink, sparks, thud), comet fairness at the start, hunger pacing, tier lengths, and now also how the round planets read and how the portrait view feels. Write the notes down and paste them into the prompt below.
-
-Then M13 part 2 Playtest tuning [Sonnet 5.5, medium]: pure number changes in `src/config` driven by notes, plus test fixes; medium is enough since no new systems are expected.
+Next: M14 Bump shrink and shed debris [Sonnet 5.5, medium]. Small, self-contained and it fixes the user's direct complaint, so it goes before the big refactor.
 How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste:
 
 ```
-Start Milestone 13 part 2 (playtest tuning) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 14 (bump shrink and shed debris) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: tune DANGER, COMETS, HUNGER, TIERS (thresholds, counts, class weights, per-tier comet tables) and, if the notes ask, the round-body look (PREY.sphereRoughness, LIGHTING) and the portrait view (CAMERA.minHorizontalFov, CAMERA.maxFov) from these playtest notes: <PASTE THE ACTUAL NOTES HERE>. All tunables stay in src/config. If the leaderboard score caps depend on a changed table, check LEADERBOARD still accepts a fast real run.
+Playtest note from the user: "taking a bump by trying to swallow a too big object should reduce your size a little". Bumps already shed mass (src/dangers/Dangers.ts, DANGER.shedFraction 0.12) but the player does not feel it: 12 percent of mass is only about 6 percent of radius, the visible radius eases down slowly (GROWTH.radiusSmoothing), and the shed is clamped to DANGER.shedFloorMargin x the hunger floor (floor = half the run's peak mass), so after a hit or two, or after any hunger drain, a bump takes nothing at all.
 
-Done when: every change traces to a note (list them in Progress.md), npm run typecheck, npm run lint and npm test pass (fix tests that assumed old numbers, do not weaken what they check), Progress.md is updated and the work is committed.
+Goal: every damaging bump visibly shrinks the hole. Raise the shed (tunable, around 20 to 25 percent of mass), make the radius drop fast on a loss (quick shrink with a small squash, growth keeps its smoothing), and throw the shed mass out as edible debris fragments (pooled, flung away from the contact, slowing down, glowing hot then cooling) that the player can eat back. Replace the hunger-floor clamp with a plain minimum (never below the start mass), and make sure a hit can never by itself trigger the hunger fail state (hunger becomes size-scaled decay in M16, so keep this simple). Keep knockback, stun, invulnerability, the hit sound and the spark burst. All numbers in src/config.
+
+Done when: a bump at any point in a run (including right after a previous hit or during hunger drain) shrinks the hole by a clearly visible amount and spawns debris that can be eaten; the danger tests are updated (not weakened) and a test covers the repeated-hit case and eating debris back; npm run typecheck, npm run lint and npm test pass; Progress.md is updated with the end-of-segment recap and the work is committed.
 ```
 
 ## Milestones
 Suggested model/effort in brackets.
 
-- [x] M0 Scaffold, git, controllable player, bloom [Sonnet 5.5, medium] (2026-10-08)
-- [x] M1 Core loop: eat smaller objects, grow, camera zoom scales with size [Sonnet 5.5, high] (2026-10-08, awaiting user playtest)
-- [x] M2 Accretion disk shader [Opus 5.5, high] (2026-10-09, awaiting user playtest)
-- [x] M3 Gravitational lensing shader [Opus 5.5, xhigh] (2026-10-09, awaiting user playtest)
-- [x] M4 Spaghettification (tidal stretch on large objects) [Opus 5.5, high] (2026-10-09, awaiting user playtest)
-- [x] M5 Spawning and size tiers (debris, asteroids/moons, planets) [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
-- [x] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest)
-- [x] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest; part 1 audio, part 2 menus, part 3 touch, gamepad and juice)
-- [x] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high] (2026-10-09, awaiting a real phone test with `?perf`)
-- [x] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium] (2026-10-09, container done and tested locally; the manual TrueNAS, Cloudflare and Umami steps are the user's)
-- [x] M10 Share card [Sonnet 5.5, medium] (2026-10-09, awaiting a real phone share)
-- [x] M11 Global leaderboard (Fastify + SQLite backend in the same compose) [Sonnet 5.5, high] (2026-10-09, works locally in compose; not deployed)
-- [x] M12 Dangers: gravity pull, collisions, comets [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
-- [~] M13 Playtest polish [Sonnet 5.5, high]: part 1 round planets and portrait FOV floor (2026-10-09, awaiting user playtest); part 2 tuning from playtest notes [Sonnet 5.5, medium] not started
-- [ ] Later: more tiers, daily seed, multiplayer
+Phase 1, single-player MVP (all done 2026-10-08 to 2026-10-09; most still await a human playtest, see Known bugs):
+- [x] M0 Scaffold, controllable player, bloom; M1 core loop; M2 accretion disk; M3 lensing; M4 spaghettification; M5 tiers; M6 hunger and score screen; M7 audio, menus, touch, gamepad, juice; M8 performance ladder; M9 Docker deploy and Umami; M10 share card; M11 global leaderboard; M12 dangers and comets; M13 part 1 round planets and portrait FOV floor
+- [-] M13 part 2 number tuning: dropped by the direction change
+
+Phase 2, multiplayer arena (in order):
+- [ ] M14 Bump shrink and shed debris [Sonnet 5.5, medium]: bumps visibly shrink the hole; shed mass becomes edible debris (in an arena, others can steal it).
+- [ ] M15 Simulation split [Opus 5.5, xhigh]: move game state and rules into `src/sim/` (no three.js, DOM or browser APIs; erasable TS with `.ts` imports so the server can run it). A `World` with a fixed timestep, seeded RNG, many holes (the local player is just one hole with an input vector), prey, comets, debris and an event queue (ate, bumped, tier, died) that render, audio, UI and juice consume. Player, PreyField, CometField, Dangers and Hunger logic move in; their render halves stay. No gameplay change: the existing Playwright suite must still pass, plus new `node --test` sim tests. Hardest architecture step, everything after builds on it.
+- [ ] M16 Mixed arena [Opus 5.5, high]: one bounded arena (size and population in config) where all prey classes coexist, density per class, uniform spatial grid for queries, respawn across the arena away from holes, rendering only what is near the camera (instanced meshes rebuilt from the visible set), soft on-theme edge. Tiers become size milestones (banner, set piece, sound) without swapping the prey table. Hunger becomes size-scaled decay (bigger holes decay faster, a tiny starving hole evaporates). Camera zoom stays continuous with size. Rebalance the leaderboard caps for the new scoring.
+- [ ] M17 Bot holes and hole vs hole, offline arena [Sonnet 5.5, high; Opus 5.5 high if the multi-hole rendering gets hard]: other holes rendered with disk, photon ring and core (cheaper lensing for non-player holes, for example lensing only the nearest few or a cheaper per-hole pass); hole vs hole eat rule (radius ratio, centre covered), near-equal holes bump and both shed; the eaten hole spaghettifies into the eater with a merger flash and a gravitational wave ripple; bot AI (wander and feed, chase smaller holes, flee bigger ones, per-bot temperament and reaction delay); bots fill the arena to a target count and respawn; nicknames over holes (generated on-theme bot names); live top 10 HUD; dying shows the score screen with "Eaten by <name>", Play again respawns. The whole game now runs as an offline arena with no server.
+- [ ] M18 Multiplayer server [Opus 5.5, xhigh]: WebSocket endpoint on the existing Fastify server (`server/`), rooms that each run a `src/sim` World at a fixed tick (20 to 30 Hz), quick play joins the fullest room with space, bots fill each room to the target population and step aside as humans join, compact binary snapshots with interest management (only what is near each client), input messages with sequence numbers, per-connection rate limits, nickname filter on join, server-scored lives. Caddy proxies the WebSocket path. Tests: sim-level room tests and headless WebSocket clients joining, moving and eating each other.
+- [ ] M19 Netcode client [Opus 5.5, xhigh]: connect from the title screen, client-side prediction of the own hole with server reconciliation, interpolation buffer for everything else, smooth corrections, ping and connection state UI, players online on the title, automatic fallback to the offline arena when the server is unreachable or drops. Online pause becomes a menu over a running arena. Playwright: two browser clients against the real server see each other and one eats the other; server down falls back offline.
+- [ ] M20 Arena leaderboard, share and analytics [Sonnet 5.5, medium]: global board takes server-scored online lives (offline lives keep the sanity caps or are marked offline), score = peak mass plus holes eaten (decide and log), "You ate <nickname>" on the score screen and share card, new analytics events (join, death cause, holes eaten).
+- [ ] M21 Load test, deploy and playtest polish [Opus 5.5, high]: bandwidth and CPU per room measured with simulated clients, room limits set for the TrueNAS box, deploy, phone playtest, tuning from notes.
+- [ ] Later (not committed): private room codes, stars and a galaxy core as bigger bodies, power-ups, daily events, disk cosmetics.
 
 ## Done
 - 2026-10-08 M0: Vite + TS + Three.js scaffold, git, ESLint (flat config), Playwright smoke test.
@@ -251,6 +250,10 @@ Suggested model/effort in brackets.
 - 2026-10-09: Round bodies are a second InstancedMesh over the same slots (not a per-instance roundness in one mesh): the rock keeps its low-poly flat look at detail 2 while spheres need a fine smooth mesh, and one material cannot be both flat and smooth shaded. Hidden slots cost only vertex work.
 - 2026-10-09: The portrait FOV floor widens the FOV only up to 55 degrees and makes up the rest by pulling the camera back. Widening alone would need about 90 degrees on a tall phone, which looks fish-eye under a 58 degree tilt and shows the spawn ring at the top of the screen. The pull-back goes through `targetDistance` and `viewScale`, so everything sized in camera distances follows it for free.
 
+- 2026-10-09: Direction change after the user's playtest: the single-player game got boring once the hole was big. New direction is an endless drop-in arena (slither.io style) with bot black holes and online players that eat each other (hole.io style). User's choices: endless drop-in over timed rounds; one mixed arena where all sizes coexist over per-tier scenes or arenas; size-scaled Hawking decay over the hunger countdown; quick play only (join the fullest room, bots fill it, offline bots-only arena when the server is down) over room codes. Bots and the offline arena come before the server so the game stays playable and testable at every step.
+- 2026-10-09: Online play will be server-authoritative on the existing Node server, sharing one pure simulation (`src/sim/`) with the client. Chosen over client-authoritative or peer-to-peer because it makes hole vs hole kills fair, lets bots run on the server and makes online leaderboard scores trustworthy. The simulation split (M15) comes before any arena or bot work so nothing has to be written twice.
+- 2026-10-09: Bump shrink first (M14): bumps already shed 12 percent of mass, but a clamp to 1.15 x the hunger floor (half the peak mass) often made it zero, and 12 percent mass is only about 6 percent radius, so players did not notice it.
+
 ## Known bugs
 - Leaderboard: anyone can post under someone else's nickname; the best run wins either way. No admin UI (DEPLOY.md has a one-line delete). The nickname filter is English-centric and small. Quitting a run from the pause menu does not post it.
 - Leaderboard: the caps were checked against test runs only, not real long runs. If a real run is rejected as implausible, `docker logs spaghettify-api` shows it; loosen `LEADERBOARD.maxMealsPerSecond`.
@@ -273,7 +276,7 @@ Suggested model/effort in brackets.
 - Dangers: tuned from numbers and stills only (pull 0.45, shed 12 percent, invulnerable 1.2 s, comet timing). Comets pass through other bodies. There is no off-screen warning for an incoming comet; the first one comes 12 s into a run.
 - Dangers: the hole's own growth next to a body can make it touch and take a hit. Edible prey are also pushed around by the body separation.
 - Comets: the tail trails behind the motion (reads well) instead of pointing away from a sun, since the scene has none. The tail is not lensed; near the hole the bent nucleus and the unbent tail can sit slightly apart.
-- Tiers: thresholds (mass 9 and 400), counts (80, 70, 60) and class weights are set from numbers and stills only. The early game may be sparse or a tier too short or long; tune `TIERS` after a playtest.
+- Tiers: thresholds (mass 9 and 400), counts (80, 70, 60) and class weights were set from numbers and stills only. M16 replaces the per-tier prey tables with one mixed arena, so tune there instead.
 - Tests: SwiftShader runs about 3 to 5 fps at 1280x720 with the lens on, so the tier and speed tests use a small viewport. For real performance numbers or screenshots, a scratch spec with `launchOptions.args: ['--use-angle=d3d11', '--ignore-gpu-blocklist']` uses the GPU.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
 - Perf: not tested on a real phone. Open the game with `?perf` on a phone and note the fps and the quality level it settles on after half a minute. Phones rarely expose the GPU timer, so the readout shows frame time only.
@@ -284,7 +287,9 @@ Suggested model/effort in brackets.
 
 ## Open questions
 - Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.
-- Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. Pause now freezes hunger.
+- Arena design numbers (decide in M16 and M17, then playtest): arena size, prey population per class, holes per room (around 12 to start), the hole vs hole radius ratio (around 1.15), how much of an eaten hole's mass transfers, and the decay curve for big holes.
+- Should bots be marked as bots in the arena (slither.io does not; it is a trust question for a public game)? Default for now: not marked in the arena, never on the global board.
+- Multiple lensed holes: the lens pass is built for one hole at the screen centre. Other holes need at least a disk, ring and black core; full lensing for each may be too costly on phones. Decide in M17.
 - Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
 - Not yet playtested on a phone (touch input exists since M7 part 3). The auto scaler handles render cost; check with `?perf`.
 - Danger feel: is the pull noticeable but fair, is a 12 percent shed too harsh or too soft, do comets need a warning? Tune `DANGER`, `COMETS` and the tier `comets` tables.
