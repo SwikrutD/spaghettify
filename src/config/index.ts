@@ -3,6 +3,12 @@
 export * from './tiers.ts';
 export * from './quality.ts';
 
+/** The shared simulation (src/sim). The client renders between steps, interpolating positions. */
+export const SIM = {
+  /** Fixed steps per second. Each step is a fixed slice of real time; the tier-up slow motion scales game time inside it. */
+  tickRate: 60,
+} as const;
+
 export const PLAYER = {
   /** Starting radius in world units ("pea-sized"). */
   startRadius: 0.5,
@@ -470,7 +476,7 @@ export const RENDER = {
   toneMappingExposure: 1.1,
   maxPixelRatio: 2,
   clearColor: 0x000000,
-  /** Frame time cap so a long frame cannot teleport the player. */
+  /** Frame time cap (seconds) so a long frame cannot teleport the player: at most this much simulation runs per frame. */
   maxFrameDt: 0.05,
 } as const;
 

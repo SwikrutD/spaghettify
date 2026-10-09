@@ -148,6 +148,8 @@ test('game loads, renders frames without console errors and the player moves', a
   await page.goto('/');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
+  // This test is about input moving the hole: no knockback from a body the hole happens to drift into.
+  await page.evaluate(() => (window.__spaghettify.dangers.enabled = false));
 
   const start = await page.evaluate(() => ({ ...window.__spaghettify.player.position }));
 

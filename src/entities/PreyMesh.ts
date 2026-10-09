@@ -1,96 +1,33 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { DISK, PREY, SPAGHETTI } from '../config';
-import type { Player } from '../player/Player';
+import { canSwallow, sizeWeight, type Body } from '../sim/body.ts';
+import { lerp, smooth, smoothstep } from '../sim/math.ts';
+import { hash01 } from '../sim/rng.ts';
+import type { World } from '../sim/World.ts';
 import { createPreyMaterial, type PreyUniforms } from './preyMaterial';
 
-export type PreyState = 'alive' | 'eating';
-
-/** One pooled prey object (also a comet nucleus). Pools never grow or shrink; entries are reused. */
-export interface PreyObject {
-  readonly position: THREE.Vector3;
-  readonly velocity: THREE.Vector3;
-  radius: number;
-  mass: number;
-  /** Name of the tier-table class this object was drawn from, e.g. "asteroid". */
-  className: string;
-  /** Drawn as a smooth sphere (planets, moons) instead of a lumpy rock. */
-  round: boolean;
-  state: PreyState;
-  /** 0..1 scale-in after (re)spawning. */
-  appear: number;
-  /** 0..1 progress of the infall after being eaten. */
-  eatProgress: number;
-  /** Infall duration in seconds (bigger prey fall in more slowly). */
-  infallTime: number;
-  /** Offset from the hole when eaten. The infall follows the hole if it moves. */
-  readonly eatOffset: THREE.Vector3;
-  /** Size weight (0..1) fixed when eaten: scales the stretch and curl of the infall. */
-  infallWeight: number;
-  /** Stretch factor at the moment it was eaten, so the infall continues from the approach stretch. */
-  stretchFrom: number;
-  /** Current tidal stretch factor (1 = none), as sent to the GPU. */
-  stretch: number;
-  /** Last unit direction from the hole to the object on the play plane (kept when the distance is ~0). */
-  dirX: number;
-  dirZ: number;
-  readonly spinAxis: THREE.Vector3;
-  spinAngle: number;
-  spinSpeed: number;
+/** What the body renderers need for one frame. */
+export interface BodyFrame {
+  readonly world: World;
+  /** 0..1: how far this frame is between the last two simulation steps. */
+  alpha: number;
+  /** Game seconds since the last frame (spin and tail animation). */
+  dt: number;
+  /** The rendered focus hole: approach stretch and the shader's hole uniform follow it. */
+  readonly hole: { readonly position: THREE.Vector3; readonly radius: number };
 }
 
-export function createPreyObject(): PreyObject {
-  return {
-    position: new THREE.Vector3(),
-    velocity: new THREE.Vector3(),
-    radius: 1,
-    mass: 1,
-    className: '',
-    round: false,
-    state: 'alive',
-    appear: 1,
-    eatProgress: 0,
-    infallTime: 1,
-    eatOffset: new THREE.Vector3(),
-    infallWeight: 0,
-    stretchFrom: 1,
-    stretch: 1,
-    dirX: 1,
-    dirZ: 0,
-    spinAxis: new THREE.Vector3(0, 1, 0),
-    spinAngle: 0,
-    spinSpeed: 0,
-  };
+/** Where the hole eating `obj` is drawn this frame, into `out` (the body's own position if that hole is gone). */
+export function eaterPosition(frame: BodyFrame, obj: Body, out: THREE.Vector3): THREE.Vector3 {
+  const hole = frame.world.hole(obj.eaterId);
+  if (!hole) return out.set(obj.position.x, 0, obj.position.z);
+  return out.set(lerp(hole.prevX, hole.position.x, frame.alpha), 0, lerp(hole.prevZ, hole.position.z, frame.alpha));
 }
 
-/** True if a hole of this radius can eat an object of the given radius. */
-export function canSwallow(objRadius: number, holeRadius: number): boolean {
-  return objRadius < holeRadius * PREY.edibleRatio;
-}
-
-/** 0..1: how big an edible object is for the hole. Bigger prey spaghettify harder and fall in more slowly. */
-export function sizeWeight(objRadius: number, holeRadius: number): number {
-  return Math.min(1, objRadius / (holeRadius * PREY.edibleRatio)) ** SPAGHETTI.sizePower;
-}
-
-/** Eat on contact: credit the mass and start the infall. `reclaimed`: the hole's own shed matter (mass back, no score). */
-export function beginInfall(obj: PreyObject, player: Player, reclaimed = false): void {
-  obj.state = 'eating';
-  obj.eatProgress = 0;
-  obj.eatOffset.subVectors(obj.position, player.position);
-  obj.infallWeight = sizeWeight(obj.radius, player.radius);
-  obj.infallTime = lerp(SPAGHETTI.infallTimeMin, SPAGHETTI.infallTimeMax, obj.infallWeight);
-  obj.stretchFrom = obj.stretch;
-  player.eat(obj.mass, { name: obj.className, radius: obj.radius }, reclaimed);
-}
-
-/** Random unit spin axis, angle and speed. */
-export function randomSpin(obj: PreyObject): void {
-  obj.spinAxis.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
-  if (obj.spinAxis.lengthSq() < 1e-4) obj.spinAxis.set(0, 1, 0);
-  obj.spinAxis.normalize();
-  obj.spinAngle = Math.random() * Math.PI * 2;
-  obj.spinSpeed = (Math.random() * 2 - 1) * PREY.spinSpeed;
+/** Infall progress (0..1) of an eating body as drawn this frame. */
+export function drawnEatProgress(obj: Body, alpha: number): number {
+  return Math.min(1, lerp(obj.prevEat, obj.eatProgress, alpha));
 }
 
 const tmpQuat = new THREE.Quaternion();
@@ -98,15 +35,23 @@ const tmpScale = new THREE.Vector3();
 const tmpPos = new THREE.Vector3();
 const tmpMat = new THREE.Matrix4();
 const tmpOffset = new THREE.Vector3();
+const tmpAxis = new THREE.Vector3();
+const tmpColor = new THREE.Color();
 const UP = new THREE.Vector3(0, 1, 0);
 const ZERO_MATRIX = new THREE.Matrix4().makeScale(0, 0, 0);
+
+/** Last state a slot was drawn in, to catch the moment a body is eaten. */
+const NONE = 0;
+const ALIVE = 1;
+const EATING = 2;
 
 export type PreyShape = 'rock' | 'sphere';
 
 /**
- * Lumpy rocks or smooth spheres drawn as one InstancedMesh with tidal stretching (spaghettification): edible objects stretch
- * toward the hole as it gets close, and eaten ones fall in, stretching into a thin spiralling stream that
- * drains into the core (see preySpaghettify.pars.vert.glsl). Used by the prey field and the comet nuclei.
+ * Lumpy rocks or smooth spheres drawn as one InstancedMesh with tidal stretching (spaghettification): edible
+ * objects stretch toward the hole as it gets close, and eaten ones fall in, stretching into a thin spiralling
+ * stream that drains into the core (see preySpaghettify.pars.vert.glsl). Used by the prey field, the comet
+ * nuclei and debris. Reads sim bodies; the look (colour, spin) comes from each body's seed.
  */
 export class PreyMesh {
   readonly mesh: THREE.InstancedMesh;
@@ -117,6 +62,17 @@ export class PreyMesh {
   /** Per instance: heat of the body itself 0..1 (shed debris), zero unless set. */
   private readonly heatAttr: THREE.InstancedBufferAttribute;
   private readonly uniforms: PreyUniforms;
+  /** Per slot: the body generation it was last drawn for, its state then and its stretch then. */
+  private readonly gens: Float64Array;
+  private readonly states: Uint8Array;
+  private readonly stretch: Float32Array;
+  /** Per slot: stretch at the moment it was eaten, so the infall continues from the approach stretch. */
+  private readonly stretchFrom: Float32Array;
+  /** Per slot: spin axis (x, y, z), angle and speed. */
+  private readonly spin: Float32Array;
+  private holeX = 0;
+  private holeZ = 0;
+  private holeRadius = 1;
 
   constructor(capacity: number, shape: PreyShape = 'rock') {
     const geometry = shape === 'sphere' ? createSphereGeometry() : createRockGeometry();
@@ -135,16 +91,24 @@ export class PreyMesh {
     this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
     this.mesh.frustumCulled = false;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    // Per-instance colour from the start, so the shader never recompiles when the first body is drawn.
+    this.mesh.setColorAt(0, tmpColor.setRGB(1, 1, 1));
+
+    this.gens = new Float64Array(capacity).fill(-1);
+    this.states = new Uint8Array(capacity);
+    this.stretch = new Float32Array(capacity).fill(1);
+    this.stretchFrom = new Float32Array(capacity).fill(1);
+    this.spin = new Float32Array(capacity * 5);
+    for (let i = 0; i < capacity; i++) this.stretchAttr.setX(i, 1);
   }
 
-  /** Once per frame, before writing instances. */
-  setHole(player: Player): void {
-    this.uniforms.uHole.value.set(player.position.x, player.position.z, player.radius);
-  }
-
-  setColor(i: number, color: THREE.Color): void {
-    this.mesh.setColorAt(i, color);
-    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+  /** Once per frame, before writing instances: the hole the approach stretch and the shader follow. */
+  setHole(frame: BodyFrame): void {
+    const { position, radius } = frame.hole;
+    this.holeX = position.x;
+    this.holeZ = position.z;
+    this.holeRadius = radius;
+    this.uniforms.uHole.value.set(position.x, position.z, radius);
   }
 
   /** Heat glow of slot i, 0..1 (flagged for upload by commit). */
@@ -152,7 +116,7 @@ export class PreyMesh {
     this.heatAttr.setX(i, heat);
   }
 
-  /** Hide slot i (an idle pool entry). */
+  /** Hide slot i (an idle pool entry, or one drawn by another mesh). */
   hide(i: number): void {
     this.mesh.setMatrixAt(i, ZERO_MATRIX);
   }
@@ -165,73 +129,89 @@ export class PreyMesh {
     this.heatAttr.needsUpdate = true;
   }
 
-  /** Transform, stretch and glow of slot i from the object's state. */
-  write(i: number, obj: PreyObject, player: Player): void {
+  /** Transform, stretch and glow of slot i from the body's sim state, between the last two steps. */
+  write(i: number, obj: Body, frame: BodyFrame): void {
+    if (this.gens[i] !== obj.gen) this.adopt(i, obj);
+    const s = i * 5;
+    this.spin[s + 3] += this.spin[s + 4] * frame.dt;
     let scale = obj.radius * smooth(obj.appear);
     let stretch = 1;
     let curl = 0;
     let glow = 0;
 
     if (obj.state === 'eating') {
+      if (this.states[i] !== EATING) this.stretchFrom[i] = this.states[i] === ALIVE ? this.stretch[i] : 1;
+      this.states[i] = EATING;
       // Infall: the distance to the hole shrinks slowly then plunges, while the object swings
       // around the hole with the disk's spin. Stretch, curl and glow build up on the way in,
       // and the last part of the infall drains it into the core.
-      const t = Math.min(obj.eatProgress, 1);
+      const t = drawnEatProgress(obj, frame.alpha);
       const fall = t ** SPAGHETTI.accelPower;
-      tmpOffset.copy(obj.eatOffset).applyAxisAngle(UP, DISK.spin * SPAGHETTI.swirl * fall);
-      setDirection(obj, tmpOffset.x, tmpOffset.z);
-      tmpPos.copy(player.position).addScaledVector(tmpOffset, 1 - fall);
+      tmpOffset.set(obj.eatOffset.x, 0, obj.eatOffset.z).applyAxisAngle(UP, DISK.spin * SPAGHETTI.swirl * fall);
+      this.setDirection(i, tmpOffset.x, tmpOffset.z);
+      eaterPosition(frame, obj, tmpPos).addScaledVector(tmpOffset, 1 - fall);
       const build = 1 - (1 - t) * (1 - t);
-      stretch = lerp(obj.stretchFrom, 1 + (SPAGHETTI.maxStretch - 1) * obj.infallWeight, build);
+      stretch = lerp(this.stretchFrom[i], 1 + (SPAGHETTI.maxStretch - 1) * obj.infallWeight, build);
       curl = DISK.spin * SPAGHETTI.curl * obj.infallWeight * build;
       glow = t;
       scale *= 1 - smoothstep(SPAGHETTI.drainStart, 1, t);
     } else {
-      tmpPos.copy(obj.position);
-      const dx = obj.position.x - player.position.x;
-      const dz = obj.position.z - player.position.z;
-      setDirection(obj, dx, dz);
+      this.states[i] = ALIVE;
+      tmpPos.set(lerp(obj.prevX, obj.position.x, frame.alpha), 0, lerp(obj.prevZ, obj.position.z, frame.alpha));
+      const hr = this.holeRadius;
+      const dx = tmpPos.x - this.holeX;
+      const dz = tmpPos.z - this.holeZ;
+      this.setDirection(i, dx, dz);
       // Tidal stretch on approach, for edible objects only.
-      if (canSwallow(obj.radius, player.radius)) {
-        const gap = (Math.sqrt(dx * dx + dz * dz) - player.radius - obj.radius) / player.radius;
+      if (canSwallow(obj.radius, hr)) {
+        const gap = (Math.sqrt(dx * dx + dz * dz) - hr - obj.radius) / hr;
         const k = Math.min(1, Math.max(0, 1 - gap / SPAGHETTI.onsetGap));
-        stretch = 1 + (SPAGHETTI.approachStretch - 1) * k * k * sizeWeight(obj.radius, player.radius);
+        stretch = 1 + (SPAGHETTI.approachStretch - 1) * k * k * sizeWeight(obj.radius, hr);
       }
     }
 
-    obj.stretch = stretch;
-    this.stretchAttr.setXYZW(i, obj.dirX, obj.dirZ, stretch, curl);
+    this.stretch[i] = stretch;
+    const attr = this.stretchAttr.array as Float32Array;
+    attr[i * 4 + 2] = stretch;
+    attr[i * 4 + 3] = curl;
     this.glowAttr.setX(i, glow);
 
-    tmpQuat.setFromAxisAngle(obj.spinAxis, obj.spinAngle);
+    tmpAxis.set(this.spin[s], this.spin[s + 1], this.spin[s + 2]);
+    tmpQuat.setFromAxisAngle(tmpAxis, this.spin[s + 3]);
     tmpScale.setScalar(Math.max(scale, 1e-4));
     tmpMat.compose(tmpPos, tmpQuat, tmpScale);
     this.mesh.setMatrixAt(i, tmpMat);
   }
-}
 
-/** Remember the direction from the hole to the object, unless they are on top of each other. */
-function setDirection(obj: PreyObject, dx: number, dz: number): void {
-  const len = Math.sqrt(dx * dx + dz * dz);
-  if (len < 1e-6) return;
-  obj.dirX = dx / len;
-  obj.dirZ = dz / len;
-}
+  /** Slot i now draws a new body: colour and spin from its seed, no stretch history. */
+  private adopt(i: number, obj: Body): void {
+    this.gens[i] = obj.gen;
+    this.states[i] = NONE;
+    this.stretch[i] = 1;
+    const seed = obj.seed;
+    const { hue, sat, light } = obj.color;
+    tmpColor.setHSL(lerp(hue[0], hue[1], hash01(seed, 0)), lerp(sat[0], sat[1], hash01(seed, 1)), lerp(light[0], light[1], hash01(seed, 2)));
+    this.mesh.setColorAt(i, tmpColor);
+    if (this.mesh.instanceColor) this.mesh.instanceColor.needsUpdate = true;
+    tmpAxis.set(hash01(seed, 3) - 0.5, hash01(seed, 4) - 0.5, hash01(seed, 5) - 0.5);
+    if (tmpAxis.lengthSq() < 1e-4) tmpAxis.set(0, 1, 0);
+    tmpAxis.normalize();
+    const s = i * 5;
+    this.spin[s] = tmpAxis.x;
+    this.spin[s + 1] = tmpAxis.y;
+    this.spin[s + 2] = tmpAxis.z;
+    this.spin[s + 3] = hash01(seed, 6) * Math.PI * 2;
+    this.spin[s + 4] = (hash01(seed, 7) * 2 - 1) * PREY.spinSpeed;
+  }
 
-export function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-function smooth(t: number): number {
-  return t * t * (3 - 2 * t);
-}
-
-function smoothstep(edge0: number, edge1: number, x: number): number {
-  return smooth(Math.min(1, Math.max(0, (x - edge0) / (edge1 - edge0))));
-}
-
-export function logUniform(min: number, max: number): number {
-  return Math.exp(lerp(Math.log(min), Math.log(max), Math.random()));
+  /** Remember the direction from the hole to the object, unless they are on top of each other. */
+  private setDirection(i: number, dx: number, dz: number): void {
+    const len = Math.sqrt(dx * dx + dz * dz);
+    if (len < 1e-6) return;
+    const attr = this.stretchAttr.array as Float32Array;
+    attr[i * 4] = dx / len;
+    attr[i * 4 + 1] = dz / len;
+  }
 }
 
 /** Lumpy unit rock. Displacement is a pure function of position, so duplicated vertices stay welded. */

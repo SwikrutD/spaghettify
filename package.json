@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "typecheck": "tsc --noEmit && tsc --noEmit -p server",
     "lint": "eslint .",
-    "test": "npm run test:server && playwright test",
+    "test": "npm run test:sim && npm run test:server && playwright test",
+    "test:sim": "node --disable-warning=ExperimentalWarning --test \"src/sim/test/**/*.test.ts\"",
     "test:server": "npm --prefix server test",
     "server": "npm --prefix server run dev",
     "perf": "playwright test -c perf/playwright.perf.config.ts"

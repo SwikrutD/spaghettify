@@ -26,7 +26,7 @@ const VIEWPORTS: Viewport[] = [
 const VARIANTS: Record<string, string> = {
   'level 0': 'd.forceQuality(0);',
   'no disk': 'd.forceQuality(0); d.player.disk.group.children[0].visible = false;',
-  'no prey': 'd.forceQuality(0); d.prey.mesh.visible = false;',
+  'no prey': 'd.forceQuality(0); d.prey.group.visible = false;',
   'no stars': 'd.forceQuality(0); d.player.group.parent.children.find((o) => o.isPoints).visible = false;',
   ...Object.fromEntries([1, 2, 3, 4, 5, 6].map((i) => [`level ${i}`, `d.forceQuality(${i});`])),
 };

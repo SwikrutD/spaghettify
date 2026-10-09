@@ -14,5 +14,6 @@
     "allowImportingTsExtensions": true,
     "types": ["vite/client", "vite-plugin-glsl/ext"]
   },
-  "include": ["src", "vite.config.ts"]
+  "include": ["src", "vite.config.ts"],
+  "exclude": ["src/sim/test"]
 }
