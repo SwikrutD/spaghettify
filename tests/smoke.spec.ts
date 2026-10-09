@@ -15,7 +15,9 @@ interface Debug {
     eat(mass: number, what?: { name: string; radius: number }): void;
     biggestEaten: { name: string; radius: number } | null;
     disk: { heat: number; starvation: number };
-    velocity: { x: number; z: number };
+    velocity: { x: number; z: number; set(x: number, y: number, z: number): void };
+    pull: { x: number; z: number };
+    stun: number;
     radiusForMass(): number;
   };
   hunger: { phase: string; idle: number; level: number; enabled: boolean; floorMass: number; runTime: number };
@@ -54,6 +56,15 @@ interface Debug {
   };
   readPixel(x: number, y: number): Promise<number[]>;
   snapshot: { image: HTMLCanvasElement | null; taken: number };
+  dangers: { enabled: boolean; invulnerable: number; hits: number; shedMass: number };
+  comets: {
+    objects: { active: boolean; state: string; radius: number; fade: number; position: { x: number; z: number }; velocity: { x: number; z: number } }[];
+    launched: number;
+    launch(x: number, z: number, vx: number, vz: number, radius: number): unknown;
+    spawn(): unknown;
+    reset(tier: unknown): void;
+  };
+  shedBurst: { live: number };
   share: { card: HTMLCanvasElement | null };
 }
 declare global {
@@ -438,7 +449,11 @@ test('speed holds on screen as the hole grows', async ({ page }) => {
   await page.goto('/');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
-  await page.evaluate(() => (window.__spaghettify.hunger.enabled = false));
+  // Pull and collisions would bend the top speed; this test is about the movement model alone.
+  await page.evaluate(() => {
+    window.__spaghettify.hunger.enabled = false;
+    window.__spaghettify.dangers.enabled = false;
+  });
   await page.mouse.move(470, 135);
 
   // Top speed in world units per second, and the view scale it should follow.
@@ -1288,5 +1303,265 @@ test.describe('touch and gamepad', () => {
     const big = await page.evaluate(() => window.__spaghettify.camera);
     expect(big.shake).toBeGreaterThan(0);
     expect(big.kick).toBeGreaterThan(0);
+  });
+});
+
+test.describe('dangers', () => {
+  // Small viewport (SwiftShader is slow) and keyboard-only controls, so the pointer never steers.
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 480, height: 270 });
+    await page.addInitScript(() => {
+      try {
+        localStorage.setItem('spaghettify.settings', JSON.stringify({ quality: 'high', scheme: 'keyboard' }));
+      } catch {
+        // Storage blocked: the defaults are fine.
+      }
+    });
+  });
+
+  /** Start a run with hunger off, the field cleared away and one big still body `gapRadii` hole radii to the right (centre to centre). */
+  async function oneBigBody(page: Page, sizeRatio: number, gapRadii: number, realClick = false): Promise<string[]> {
+    const errors: string[] = [];
+    page.on('console', (m) => {
+      if (m.type() === 'error' && !m.text().includes('Failed to load resource')) errors.push(m.text());
+    });
+    page.on('pageerror', (e) => errors.push(e.message));
+    await page.goto('/');
+    await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+    await startRun(page, realClick);
+    await page.evaluate(
+      ([sizeRatio, gapRadii]) => {
+        const d = window.__spaghettify;
+        const { player, prey } = d;
+        d.hunger.enabled = false;
+        // Everything else respawns on the ring off screen, out of pull reach.
+        for (const o of prey.objects) o.position.x += 100000;
+        const body = prey.objects[0];
+        body.radius = player.radius * sizeRatio;
+        body.mass = body.radius * body.radius;
+        body.velocity.set(0, 0, 0);
+        body.position.set(player.position.x + player.radius * gapRadii, 0, player.position.z);
+        player.velocity.set(0, 0, 0);
+      },
+      [sizeRatio, gapRadii],
+    );
+    return errors;
+  }
+
+  test('gravity pull: with no input the hole drifts toward a big body, and steering away escapes it', async ({ page }) => {
+    const errors = await oneBigBody(page, 4, 7);
+    const start = await page.evaluate(() => {
+      const { player } = window.__spaghettify;
+      return { x: player.position.x, z: player.position.z, r: player.radius };
+    });
+
+    // No input at all: the pull alone moves the hole right, toward the body.
+    await page.waitForFunction((s) => window.__spaghettify.player.position.x > s.x + s.r * 0.3, start, { timeout: 20_000 });
+    const pulled = await page.evaluate(() => {
+      const { player, input } = window.__spaghettify;
+      return { z: player.position.z, vx: player.velocity.x, px: player.pull.x, pz: player.pull.z, move: { ...input.move } };
+    });
+    expect(pulled.move).toEqual({ x: 0, y: 0 });
+    expect(pulled.px).toBeGreaterThan(0);
+    expect(Math.abs(pulled.pz)).toBeLessThan(pulled.px * 0.01);
+    expect(pulled.vx).toBeGreaterThan(0);
+    expect(Math.abs(pulled.z - start.z)).toBeLessThan(start.r * 0.05);
+
+    // Steering away beats the pull: the hole ends up well left of where it started.
+    await page.keyboard.down('ArrowLeft');
+    await page.waitForFunction((s) => window.__spaghettify.player.position.x < s.x - s.r, start, { timeout: 20_000 });
+    await page.keyboard.up('ArrowLeft');
+    expect(errors).toEqual([]);
+  });
+
+  test('collision: touching a big body knocks the hole back, sheds mass (not score), then grants invulnerability', async ({ page }) => {
+    // A real click unlocks audio so the hit sound can be counted.
+    const errors = await oneBigBody(page, 4, 1, true);
+    const before = await page.evaluate(() => {
+      const { player, camera } = window.__spaghettify;
+      return { mass: player.mass, eatenMass: player.eatenMass, shake: camera.shake };
+    });
+
+    // The body was placed overlapping the hole: one hit on the next frame.
+    await page.waitForFunction(() => window.__spaghettify.dangers.hits === 1);
+    const hit = await page.evaluate(() => {
+      const { player, prey, dangers, camera, shedBurst, audio } = window.__spaghettify;
+      const body = prey.objects[0];
+      return {
+        mass: player.mass,
+        eatenMass: player.eatenMass,
+        vx: player.velocity.x,
+        gap: Math.hypot(player.position.x - body.position.x, player.position.z - body.position.z) - (player.radius + body.radius),
+        invulnerable: dangers.invulnerable,
+        shed: dangers.shedMass,
+        shake: camera.shake,
+        sparks: shedBurst.live,
+        sound: audio.played.hit ?? 0,
+      };
+    });
+    expect(hit.mass).toBeLessThan(before.mass * 0.95);
+    expect(hit.mass).toBeGreaterThan(before.mass * 0.8);
+    expect(hit.shed).toBeCloseTo(before.mass - hit.mass, 5);
+    expect(hit.eatenMass).toBe(before.eatenMass);
+    // Knocked back: pushed out of the body and moving away from it (it is to the right).
+    expect(hit.gap).toBeGreaterThanOrEqual(-1e-6);
+    expect(hit.vx).toBeLessThan(0);
+    expect(hit.invulnerable).toBeGreaterThan(0);
+    expect(hit.shake).toBeGreaterThan(before.shake);
+    expect(hit.sparks).toBeGreaterThan(0);
+    expect(hit.sound).toBe(1);
+
+    // Invulnerable: shoved back into the body, the hole is pushed out again but loses nothing.
+    const again = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { player, prey, dangers } = d;
+      const body = prey.objects[0];
+      const mass = player.mass;
+      player.position.x = body.position.x - body.radius * 0.5;
+      player.position.z = body.position.z;
+      const f = d.frames;
+      while (d.frames < f + 2) await new Promise(requestAnimationFrame);
+      return {
+        hits: dangers.hits,
+        lost: mass - player.mass,
+        gap: Math.hypot(player.position.x - body.position.x, player.position.z - body.position.z) - (player.radius + body.radius),
+        invulnerable: dangers.invulnerable,
+      };
+    });
+    expect(again.hits).toBe(1);
+    expect(again.lost).toBeLessThan(1e-9);
+    expect(again.gap).toBeGreaterThanOrEqual(-1e-6);
+    expect(again.invulnerable).toBeGreaterThan(0);
+
+    // Once it wears off the next contact hurts again, but a hit never takes mass below the margin over the hunger floor.
+    await page.waitForFunction(() => window.__spaghettify.dangers.invulnerable === 0, undefined, { timeout: 30_000 });
+    const floorCase = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { player, prey, dangers, hunger } = d;
+      const body = prey.objects[0];
+      player.mass = hunger.floorMass * 1.18;
+      player.position.x = body.position.x - body.radius * 0.5;
+      player.position.z = body.position.z;
+      const f = d.frames;
+      while (d.frames < f + 2) await new Promise(requestAnimationFrame);
+      return { hits: dangers.hits, mass: player.mass, floor: hunger.floorMass, phase: hunger.phase };
+    });
+    expect(floorCase.hits).toBe(2);
+    expect(floorCase.mass).toBeGreaterThanOrEqual(floorCase.floor * 1.15 - 1e-9);
+    expect(floorCase.phase).toBe('playing');
+    expect(errors).toEqual([]);
+  });
+
+  test('big bodies never stay overlapped: an overlapping pair is pushed apart', async ({ page }) => {
+    const errors = await oneBigBody(page, 4, 30);
+    const spacing = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { player, prey } = d;
+      const [a, b] = prey.objects;
+      b.radius = a.radius;
+      b.mass = a.mass;
+      b.velocity.set(0, 0, 0);
+      b.position.set(a.position.x + a.radius * 0.5, 0, a.position.z + player.radius * 0.1);
+      const f = d.frames;
+      while (d.frames < f + 40) await new Promise(requestAnimationFrame);
+      return Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z) / (a.radius + b.radius);
+    });
+    expect(spacing).toBeGreaterThan(0.97);
+    expect(errors).toEqual([]);
+  });
+
+  test('comets: one crosses the view on a straight line and leaves; one aimed at the hole hits it; a small one is eaten', async ({ page }) => {
+    test.setTimeout(120_000);
+    const errors = await oneBigBody(page, 4, 1000);
+    // A comet from the tier's table enters on the spawn ring heading for the hole.
+    const spawned = await page.evaluate(() => {
+      const d = window.__spaghettify;
+      const { comets, player, camera } = d;
+      comets.reset(d.tiers.tier);
+      comets.spawn();
+      const c = comets.objects.find((o) => o.active)!;
+      const dx = player.position.x - c.position.x;
+      const dz = player.position.z - c.position.z;
+      const speed = Math.hypot(c.velocity.x, c.velocity.z);
+      const result = {
+        dist: Math.hypot(dx, dz) / camera.targetDistance,
+        heading: (dx * c.velocity.x + dz * c.velocity.z) / (Math.hypot(dx, dz) * speed),
+        speed: speed / camera.targetDistance,
+      };
+      comets.reset(d.tiers.tier);
+      return result;
+    });
+    expect(spawned.dist).toBeCloseTo(1.3, 2);
+    expect(spawned.heading).toBeGreaterThan(0.9);
+    expect(spawned.speed).toBeGreaterThan(0.4);
+    expect(spawned.speed).toBeLessThan(0.65);
+
+    // A crossing: enters left of the hole, passes it on a straight line well clear of it and is recycled off to the right.
+    const crossing = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { comets, player, camera } = d;
+      const view = camera.targetDistance;
+      const z = player.position.z - view * 0.3;
+      comets.launch(player.position.x - view * 1.2, z, view * 2, 0, player.radius * 2);
+      const c = comets.objects.find((o) => o.active)!;
+      let passed = false;
+      let maxDrift = 0;
+      let fade = 0;
+      for (let i = 0; i < 400 && c.active; i++) {
+        const f = d.frames;
+        while (d.frames === f) await new Promise(requestAnimationFrame);
+        if (c.active) {
+          maxDrift = Math.max(maxDrift, Math.abs(c.position.z - z));
+          if (c.position.x > player.position.x) passed = true;
+          fade = Math.max(fade, c.fade);
+        }
+      }
+      return { passed, maxDrift, fade, active: c.active, hits: d.dangers.hits, launched: comets.launched };
+    });
+    expect(crossing.passed).toBe(true);
+    expect(crossing.maxDrift).toBeLessThan(1e-6);
+    expect(crossing.fade).toBeGreaterThan(0.5);
+    expect(crossing.active).toBe(false);
+    expect(crossing.hits).toBe(0);
+    expect(crossing.launched).toBe(1);
+
+    // Aimed at the hole and bigger than it: a hit, knocked along the comet's travel.
+    const hit = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { comets, player, camera } = d;
+      const view = camera.targetDistance;
+      comets.launch(player.position.x - view * 0.5, player.position.z, view, 0, player.radius * 2);
+      const c = comets.objects.find((o) => o.active)!;
+      for (let i = 0; i < 300 && d.dangers.hits === 0; i++) {
+        const f = d.frames;
+        while (d.frames === f) await new Promise(requestAnimationFrame);
+      }
+      return { hits: d.dangers.hits, vx: player.velocity.x, state: c.state };
+    });
+    expect(hit.hits).toBe(1);
+    expect(hit.vx).toBeGreaterThan(0);
+    expect(hit.state).toBe('alive');
+
+    // Small enough to swallow: a fast meal that spaghettifies like any prey.
+    const meal = await page.evaluate(async () => {
+      const d = window.__spaghettify;
+      const { comets, player } = d;
+      const eaten = player.eatenCount;
+      comets.reset(d.tiers.tier);
+      // Hold the hole still after the knockback.
+      player.stun = 0;
+      player.velocity.set(0, 0, 0);
+      comets.launch(player.position.x, player.position.z - player.radius * 4, 0, player.radius * 6, player.radius * 0.5);
+      const c = comets.objects.find((o) => o.active)!;
+      for (let i = 0; i < 300 && player.eatenCount === eaten; i++) {
+        const f = d.frames;
+        while (d.frames === f) await new Promise(requestAnimationFrame);
+      }
+      return { eaten: player.eatenCount - eaten, state: c.state, biggest: player.biggestEaten?.name };
+    });
+    expect(meal.eaten).toBe(1);
+    expect(meal.state).toBe('eating');
+    expect(meal.biggest).toBe('comet');
+    expect(errors).toEqual([]);
   });
 });

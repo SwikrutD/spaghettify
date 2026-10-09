@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { GROWTH, PLAYER } from '../config';
+import { DANGER, GROWTH, PLAYER } from '../config';
 import type { MoveVector } from '../input/InputSource';
 import { CORE_LAYER } from '../render/layers';
 import { AccretionDisk } from './AccretionDisk';
@@ -7,6 +7,11 @@ import { AccretionDisk } from './AccretionDisk';
 /** Mass of a sphere-ish body of the given radius. Shared by the player and prey so eating is consistent. */
 export function massOfRadius(radius: number): number {
   return GROWTH.massDensity * Math.pow(radius, GROWTH.massExponent);
+}
+
+/** The hole's top speed at a view scale (camera distance over its starting distance): constant on screen. */
+export function topSpeed(viewScale: number): number {
+  return PLAYER.maxSpeed * Math.pow(viewScale, PLAYER.speedExponent);
 }
 
 /**
@@ -29,6 +34,10 @@ export class Player {
   biggestEaten: { name: string; radius: number } | null = null;
   /** Called after each meal with the prey mass and what was eaten. */
   onEat: ((preyMass: number, what?: { name: string; radius: number }) => void) | null = null;
+  /** External acceleration (gravity pull from big bodies), set each frame by Dangers. */
+  readonly pull = new THREE.Vector3();
+  /** Seconds left of a hit's stun: input is ignored and the knockback carries the hole. */
+  stun = 0;
   readonly disk = new AccretionDisk();
   private readonly startMass = this.mass;
 
@@ -46,13 +55,16 @@ export class Player {
 
   /** `viewScale` is the camera distance as a multiple of its starting distance: speed follows it so the on-screen speed holds. */
   update(dt: number, move: MoveVector, viewScale: number): void {
-    const maxSpeed = PLAYER.maxSpeed * Math.pow(viewScale, PLAYER.speedExponent);
+    const maxSpeed = topSpeed(viewScale);
+    const stunned = this.stun > 0;
+    this.stun = Math.max(0, this.stun - dt);
     // Screen up maps to -Z on the play plane.
-    const tx = move.x * maxSpeed;
-    const tz = -move.y * maxSpeed;
-    const k = 1 - Math.exp(-PLAYER.responsiveness * dt);
+    const tx = stunned ? 0 : move.x * maxSpeed;
+    const tz = stunned ? 0 : -move.y * maxSpeed;
+    const k = 1 - Math.exp(-(stunned ? DANGER.stunResponsiveness : PLAYER.responsiveness) * dt);
     this.velocity.x += (tx - this.velocity.x) * k;
     this.velocity.z += (tz - this.velocity.z) * k;
+    this.velocity.addScaledVector(this.pull, dt);
     this.velocity.multiplyScalar(Math.exp(-PLAYER.drag * dt));
     this.position.addScaledVector(this.velocity, dt);
 
@@ -70,6 +82,8 @@ export class Player {
     this.biggestEaten = null;
     this.position.set(0, 0, 0);
     this.velocity.set(0, 0, 0);
+    this.pull.set(0, 0, 0);
+    this.stun = 0;
     this.disk.reset();
     this.setRadius(PLAYER.startRadius);
   }

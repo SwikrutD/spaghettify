@@ -48,6 +48,15 @@ export class Sfx {
     this.tone('square', f * 0.5, f * 0.4, 0.18, W.level * 0.15, 0, 0.01, 500);
   }
 
+  /** Collision: a low thud, a crunch and a short dissonant sting. */
+  hit(): void {
+    const H = AUDIO.hit;
+    this.tone('sine', H.thumpFrom, H.thumpTo, H.thumpTime, H.level);
+    this.puff(H.crunchTime, H.crunchCutoff, H.level * 0.6);
+    this.tone('square', H.stingFreq, H.stingFreq * 0.94, H.stingTime, H.level * 0.12, 0.02, 0.01, 1800);
+    this.tone('square', H.stingFreq * 1.06, H.stingFreq, H.stingTime, H.level * 0.1, 0.02, 0.01, 1800);
+  }
+
   evaporate(): void {
     const V = AUDIO.evaporate;
     this.tone('sawtooth', V.sweepFrom, V.sweepTo, V.time, V.level * 0.5, 0, 0.02, 1500);

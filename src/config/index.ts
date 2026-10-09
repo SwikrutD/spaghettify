@@ -99,6 +99,101 @@ export const PREY = {
 } as const;
 
 /**
+ * Dangers: bodies the hole cannot eat pull it toward them and hurt it on contact. Comets (the roaming
+ * hazard) are in COMETS and in each tier's `comets` table. Pull strength is a fraction of the hole's
+ * steering authority (PLAYER.responsiveness x current top speed), so it feels the same at every size.
+ */
+export const DANGER = {
+  /** Bodies at least this many times the hole radius pull it. Smaller inedible bodies only block. */
+  pullMinRatio: 1.2,
+  /** Pull strength ramps up to full at this body to hole radius ratio. */
+  pullFullRatio: 3,
+  /**
+   * Pull acceleration at a full-strength body's surface, as a fraction of the steering authority.
+   * 0.45 drifts the hole in at about 0.4 of top speed with no input; holding away still escapes at about 0.6.
+   */
+  pullStrength: 0.45,
+  /** Pull falls off as (bodyRadius / distance) ^ pullFalloff and fades to zero at pullReach body radii from the centre. */
+  pullReach: 4,
+  pullFalloff: 2,
+  /** Total pull from all bodies is capped at this fraction of the steering authority (below 1: always escapable). */
+  pullMax: 0.7,
+  /** Contact distance and body spacing use (radius sum) x bodyPad: the rocks are lumpy, so a bit over their radius. */
+  bodyPad: 1.08,
+  /** Knockback speed as a multiple of the hole's current top speed. */
+  knockSpeed: 1.5,
+  /** Seconds after a hit when input is ignored, and how fast the velocity recovers meanwhile (1/s). */
+  stunTime: 0.3,
+  stunResponsiveness: 0.8,
+  /** Fraction of mass shed per hit (not score: score is mass eaten). */
+  shedFraction: 0.12,
+  /** A hit never takes mass below the hunger floor x this. Hits alone never end a run; they bring starvation closer. */
+  shedFloorMargin: 1.15,
+  /** Seconds of invulnerability after a hit. Contact still pushes the hole out, without damage. */
+  invulnerableTime: 1.2,
+  /** The disk blinks while invulnerable: blinks per second and how much it dims (0..1, the starvation scale). */
+  blinkRate: 8,
+  blinkDim: 0.75,
+  /** Camera shake added by a hit (fraction of the camera distance). */
+  hitShake: 0.035,
+  /** Spawned bodies the hole cannot eat keep their pull reach plus this many hole radii clear of it, where the spawn ring allows. */
+  spawnClearance: 1,
+  /** Tries to place a spawn clear of other bodies. */
+  spawnTries: 6,
+  /** Overlapping bodies are pushed apart at this rate (1/s, fraction of the overlap). */
+  separationRate: 12,
+} as const;
+
+/** Comets: the roaming hazard. They cross the view on a straight line; per-tier sizes, speeds and timing are in TIERS. */
+export const COMETS = {
+  /** Most comets live at once. */
+  poolSize: 3,
+  /** Comets enter on a ring this far out (camera distances), aimed at a point within aimSpread camera distances of the hole. */
+  spawnDistance: 1.3,
+  aimSpread: 0.3,
+  /** Recycled once this far away (camera distances) and moving away. */
+  despawnDistance: 1.8,
+  /** On a hit the knockback direction blends the contact normal with the comet's direction of travel by this much. */
+  knockAlongTravel: 0.6,
+  /** Nucleus colours (HSL ranges): real nuclei are dark, icy dust under a crust; the coma lights them. */
+  color: { hue: [0.52, 0.6], sat: [0.05, 0.15], light: [0.25, 0.4] },
+  /** Tail length: this many nucleus radii plus a fraction of the camera distance, so small comets still trail far. */
+  tailLengthRadii: 6,
+  tailLengthView: 0.3,
+  /** Tail width at the head in nucleus radii; it flares out to (1 + tailFlare) times that at the end. */
+  tailWidth: 2,
+  tailFlare: 2.5,
+  /** Tail colours: a straight blue ion tail and a broader warm dust tail, HDR intensity. */
+  ionColor: 0x6fa8ff,
+  dustColor: 0xffe2b0,
+  intensity: 1,
+  /** Glowing coma around the nucleus, in nucleus radii. */
+  comaRadius: 2.4,
+  /** Seconds to fade in after spawning. */
+  appearTime: 0.6,
+} as const;
+
+/** Glowing fragments thrown off the disk when a hit sheds mass. Pure effect, never edible. */
+export const SHED_BURST = {
+  /** Particle pool and particles per hit. */
+  poolSize: 96,
+  perHit: 32,
+  /** Lifetime in seconds. */
+  lifeMin: 0.5,
+  lifeMax: 1.1,
+  /** Launch speed in hole radii per second, and drag (1/s). */
+  speedMin: 2,
+  speedMax: 6,
+  drag: 2.2,
+  /** Particle size in hole radii. */
+  sizeMin: 0.12,
+  sizeMax: 0.3,
+  /** HDR colour (hot disk matter) at birth; it reddens and fades. */
+  color: 0xffa050,
+  intensity: 3,
+} as const;
+
+/**
  * Spaghettification: tidal stretching of edible prey on the way into the hole. Prey stretch along the
  * line to the hole and thin out across it. Bigger edible prey (relative to the player) stretch more and
  * fall in more slowly. Inedible objects are inert.
@@ -413,6 +508,18 @@ export const AUDIO = {
     /** Seconds between pulses at the start level and at full hunger. */
     periodSlow: 1.1,
     periodFast: 0.35,
+  },
+
+  /** Collision with a body or comet: a low thud, a crunch of noise and a short dissonant sting. */
+  hit: {
+    level: 0.55,
+    thumpFrom: 110,
+    thumpTo: 38,
+    thumpTime: 0.4,
+    crunchCutoff: 1400,
+    crunchTime: 0.25,
+    stingFreq: 466,
+    stingTime: 0.3,
   },
 
   evaporate: {

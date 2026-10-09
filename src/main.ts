@@ -1,7 +1,10 @@
 import * as THREE from 'three';
-import { HUNGER, JUICE, LIGHTING, QUALITY, RENDER, TIERS } from './config';
+import { CAMERA, DANGER, HUNGER, JUICE, LIGHTING, QUALITY, RENDER, TIERS } from './config';
 import { initAnalytics, scoreBand, track } from './analytics/analytics';
 import { AudioEngine } from './audio/AudioEngine';
+import { Dangers } from './dangers/Dangers';
+import { ShedBurst } from './effects/ShedBurst';
+import { CometField } from './entities/CometField';
 import { PreyField } from './entities/PreyField';
 import { InputManager } from './input/InputManager';
 import { GamepadInput } from './input/GamepadInput';
@@ -36,10 +39,12 @@ const player = new Player();
 const tiers = new TierDirector();
 const gameCamera = new GameCamera(player.position, player.radius, tiers.tier.cameraScale);
 const prey = new PreyField(player, gameCamera, tiers.tier);
+const comets = new CometField(player, gameCamera, tiers.tier);
+const shedBurst = new ShedBurst();
 const starfield = createStarfield();
 const keyLight = new THREE.DirectionalLight(LIGHTING.keyColor, LIGHTING.key);
 keyLight.position.set(...LIGHTING.keyPosition);
-scene.add(starfield.points, player.group, prey.mesh, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
+scene.add(starfield.points, player.group, prey.mesh, comets.group, shedBurst.points, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
 
 const audio = new AudioEngine();
 const settings = new Settings();
@@ -60,11 +65,19 @@ const banner = new TierBanner();
 tiers.onTierUp = (tier, index) => {
   gameCamera.setTierScale(tier.cameraScale);
   prey.setTier(tier);
+  comets.setTier(tier);
   banner.show(index + 1, tier.title);
   audio.tierUp();
   gameCamera.addShake(JUICE.tierShake);
 };
 const hunger = new Hunger(player);
+const dangers = new Dangers(player, prey, comets, hunger);
+// A hit: shake, thud and a spray of the shed disk matter.
+dangers.onHit = (hit) => {
+  gameCamera.addShake(DANGER.hitShake);
+  audio.hit();
+  shedBurst.emit(player.position.x, player.position.z, hit.nx, hit.nz, player.radius);
+};
 const hungerOverlay = new HungerOverlay();
 const scoreScreen = new ScoreScreen();
 
@@ -133,7 +146,10 @@ function resetRun(): void {
   tiers.reset();
   gameCamera.reset(player.position, player.radius, tiers.tier.cameraScale);
   prey.reset(tiers.tier);
+  comets.reset(tiers.tier);
   hunger.reset();
+  dangers.reset();
+  shedBurst.reset();
   hungerOverlay.reset();
   banner.reset();
   audio.reset(player.radius);
@@ -168,6 +184,7 @@ function applyQuality(index = qualityLevel()): void {
   renderer.setQuality(level);
   player.disk.setDetail(level.diskLayers, level.diskOctaves);
   player.disk.setRenderHeight(renderer.bufferHeight);
+  shedBurst.setViewport(renderer.bufferHeight, CAMERA.fov);
 }
 autoQuality.onChange = () => applyQuality();
 
@@ -260,6 +277,7 @@ function resize(): void {
   const h = window.innerHeight;
   renderer.resize(w, h);
   player.disk.setRenderHeight(renderer.bufferHeight);
+  shedBurst.setViewport(renderer.bufferHeight, CAMERA.fov);
   gameCamera.resize(w, h);
 }
 window.addEventListener('resize', resize);
@@ -273,6 +291,9 @@ const debug = {
   cpuMs: 0,
   player,
   prey,
+  comets,
+  dangers,
+  shedBurst,
   tiers,
   hunger,
   hungerOverlay,
@@ -331,6 +352,8 @@ function frame(now: number): void {
   tiers.update(realDt, player.mass);
   // Game time dips into slow motion during the tier-up; the camera and overlays run on real time.
   const dt = realDt * tiers.timeScale;
+  // Big bodies pull the hole and push it out on contact (a hit sheds mass), before it moves.
+  dangers.update(dt, gameCamera.viewScale);
   // Input only steers while the run is live; during and after the evaporation the hole just drifts.
   player.update(dt, hunger.phase === 'playing' ? input.move : NO_MOVE, gameCamera.viewScale);
   hunger.update(dt, realDt);
@@ -339,8 +362,11 @@ function frame(now: number): void {
   if (hunger.phase === 'evaporating') snapshot.ensure();
   player.canEat = hunger.phase === 'playing';
   hungerOverlay.update(realDt, hunger.level);
-  player.disk.starvation = hungerOverlay.level;
+  // The disk dims as the hole starves and blinks while it is invulnerable after a hit.
+  player.disk.starvation = Math.max(hungerOverlay.level, dangers.blink);
   prey.update(dt);
+  comets.update(dt);
+  shedBurst.update(dt);
   audio.update(realDt, player.radius, hungerOverlay.level, hunger.phase);
   gameCamera.punch = tiers.punch;
   gameCamera.update(realDt, player.position, player.radius);

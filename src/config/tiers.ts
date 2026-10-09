@@ -34,6 +34,21 @@ export interface Tier {
   /** Camera distance multiplier. The view pulls back to this when the tier begins. */
   cameraScale: number;
   classes: readonly PreyClass[];
+  comets: CometTable;
+}
+
+/**
+ * Comets of one tier: the roaming hazard. A comet the hole cannot eat knocks it back; once the hole is big
+ * enough it is a fast meal. Real comet nuclei are about asteroid-sized, so the radii stay in that range.
+ */
+export interface CometTable {
+  /** Nucleus radius range, sampled log-uniformly. */
+  radius: Range;
+  /** Speed in camera distances per second (the hole's top speed is about 0.8). */
+  speed: Range;
+  /** Seconds between comets, and before the first one of the tier. */
+  interval: Range;
+  firstDelay: number;
 }
 
 const DUST: PreyColor = { hue: [0.06, 0.1], sat: [0.05, 0.2], light: [0.35, 0.5] };
@@ -56,6 +71,7 @@ export const TIERS: readonly Tier[] = [
       { name: 'rock', radius: [0.45, 0.85], weight: 3, color: ROCK },
       { name: 'boulder', radius: [0.9, 1.8], weight: 1.5, color: ROCK },
     ],
+    comets: { radius: [0.8, 1.4], speed: [0.45, 0.6], interval: [11, 18], firstDelay: 12 },
   },
   {
     title: 'Asteroids and moons',
@@ -70,6 +86,7 @@ export const TIERS: readonly Tier[] = [
       { name: 'dwarf planet', radius: [11, 18], weight: 1.2, color: ICY },
       { name: 'moon', radius: [18, 26], weight: 0.5, color: GREY },
     ],
+    comets: { radius: [4, 9], speed: [0.5, 0.7], interval: [9, 15], firstDelay: 6 },
   },
   {
     title: 'Planets',
@@ -85,6 +102,7 @@ export const TIERS: readonly Tier[] = [
       { name: 'ice giant', radius: [80, 120], weight: 1, color: ICE_GIANT },
       { name: 'gas giant', radius: [150, 220], weight: 0.7, color: GAS_GIANT },
     ],
+    comets: { radius: [6, 14], speed: [0.55, 0.75], interval: [8, 14], firstDelay: 6 },
   },
 ];
 

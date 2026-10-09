@@ -167,6 +167,11 @@ export class AudioEngine {
     this.guard(() => this.sfx?.tierUp(), 'tierUp');
   }
 
+  /** A collision with a body or comet. */
+  hit(): void {
+    this.guard(() => this.sfx?.hit(), 'hit');
+  }
+
   /** Fresh run: the drone comes back and the warning and growth trackers restart. */
   reset(radius: number): void {
     this.evaporating = false;

@@ -1,17 +1,17 @@
 # Progress - Spaghettify
 
 ## Next session
-Before it, the user deploys both images (`deploy/DEPLOY.md`, now two containers plus a leaderboard dataset), fills in the Umami website id, and playtests the live site on a desktop and a phone (`?perf`, SHARE, the leaderboard with a nickname). Feed any playtest notes into the next session's prompt.
+Before it, the user deploys (`deploy/DEPLOY.md`), fills in the Umami website id and playtests on a desktop and a phone, now with dangers: is the pull noticeable but fair, do hits read (blink, sparks, thud), are comets fair at the start? Feed the notes into the prompt.
 
-Then M12 Dangers [Sonnet 5.5, high]: the CLAUDE.md dangers that do not exist yet. Gravity pull from large bodies, collisions with bigger objects (knockback plus mass shed), and one roaming hazard (comets). This is the biggest gap in the core loop; until now big prey are inert.
+Then M13 Playtest polish [Sonnet 5.5, high]: round smooth planets and moons instead of potato rocks, a horizontal FOV floor for portrait phones, and danger, hunger and tier tuning from the playtest notes.
 How to start: `/clear`, then `/model` (Sonnet 5.5, high), then paste:
 
 ```
-Start Milestone 12 (dangers) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 13 (playtest polish) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: make big objects dangerous, per the Dangers section of CLAUDE.md. (1) Gravity pull: inedible bodies above a size ratio drag the hole toward them, falling off with distance, strong enough to notice but possible to steer against. (2) Collisions: touching an inedible body knocks the hole back and sheds a fraction of its mass (shed mass is not score; it must play well with the hunger fail floor), with a short invulnerability window, camera shake and a danger sound (see the audio known bug). (3) One roaming hazard: comets that cross the screen on a straight path with a glowing tail, inedible until you are big enough, spawned from tables in src/config. All tunables in src/config, no per-frame allocations, pooled like the prey. Big inert prey overlapping each other and the hole ending up inside one (Known bugs) must be handled now that contact matters. Include any playtest notes the user gives.
+Goal: (1) Big bodies read as round planets and moons, not lumpy rocks: a second smooth sphere mesh (or a per-instance roundness) for the planet and moon classes, keeping one draw call per mesh, the spaghettification stretch (preySpaghettify glsl) and the alpha 1 lens mask. Comets share PreyMesh, so keep their nuclei lumpy. (2) Portrait phones: a horizontal FOV floor in GameCamera.resize so the view is not a narrow slit and the fed disk does not span the screen. (3) Tune DANGER, COMETS, HUNGER and TIERS from these playtest notes: <paste notes>. All tunables stay in src/config.
 
-Done when: Playwright tests cover pull (the hole drifts toward a big body with no input), collision (knockback, mass loss, invulnerability) and a comet crossing; npm run typecheck, npm run lint and npm test pass; Progress.md is updated and the work is committed.
+Done when: the existing Playwright tests still pass (update any that assume rock meshes), a new test covers the portrait FOV floor, npm run typecheck, npm run lint and npm test pass, Progress.md is updated and the work is committed.
 ```
 
 ## Milestones
@@ -29,7 +29,8 @@ Suggested model/effort in brackets.
 - [x] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium] (2026-10-09, container done and tested locally; the manual TrueNAS, Cloudflare and Umami steps are the user's)
 - [x] M10 Share card [Sonnet 5.5, medium] (2026-10-09, awaiting a real phone share)
 - [x] M11 Global leaderboard (Fastify + SQLite backend in the same compose) [Sonnet 5.5, high] (2026-10-09, works locally in compose; not deployed)
-- [ ] M12 Dangers: gravity pull, collisions, comets [Sonnet 5.5, high]
+- [x] M12 Dangers: gravity pull, collisions, comets [Sonnet 5.5, high] (2026-10-09, awaiting user playtest)
+- [ ] M13 Playtest polish: round planets, portrait FOV floor, tuning [Sonnet 5.5, high]
 - [ ] Later: more tiers, daily seed, multiplayer
 
 ## Done
@@ -171,6 +172,17 @@ Suggested model/effort in brackets.
   - Dev: `npm run server` (watch mode) plus `npm run dev` (Vite proxies `/api` to port 3000). `npm run typecheck` also checks `server/`; `npm test` runs the server tests (`node --test`, 9 tests: rules, submit, top, rank, rejections, body limit, rate limit including the proxy and spoofed header cases, health) and then Playwright (24 tests, also all pass against the container with `BASE_URL`).
   - Playwright: every test stubs `/api` with an empty board by default (the server is never needed). New tests: mocked board on the title and score screens (posted body matches the run, row lit, HTML in a nickname shown as text); server refusing reads and hanging on submit (offline message after the timeout, Play again works); no nickname (nothing posted, would-place line). Chrome's own "Failed to load resource" console lines for refused /api requests are ignored in those tests; any other console error fails them.
 
+- 2026-10-09 M12: dangers (awaiting human playtest).
+  - `src/entities/PreyMesh.ts`: the instanced rock mesh, `PreyObject`, the approach stretch and infall writer, `beginInfall`, `canSwallow` and `sizeWeight` moved out of PreyField so comets share them. PreyField keeps spawning and eating; `prey.mesh` and `prey.objects` are unchanged for tests.
+  - Gravity pull (`src/dangers/Dangers.ts`, `DANGER` in config): every live body at least `pullMinRatio` 1.2 times the hole radius pulls it, full strength from `pullFullRatio` 3, falling off as (R/d)^2 and fading to zero at `pullReach` 4 body radii. Strength is a fraction of the steering authority (responsiveness x current top speed): 0.45 at a full-size body's surface, total capped at 0.7, so it scales with size and can always be steered against. Applied through `player.pull` (an acceleration) in `Player.update`. Survey on the real GPU: typical pull 4 to 9 percent of authority, 15 to 20 percent at the 90th percentile.
+  - Collisions: contact at (hole + body radius) x `bodyPad` 1.08 always pushes the hole out and removes velocity into the body, so it can never sit inside one. Unless invulnerable or not playing: knockback at 1.5 x top speed, 0.3 s stun (input ignored, slow recovery), sheds 12 percent of mass but never below 1.15 x the hunger floor, then 1.2 s invulnerability with the disk blinking (`disk.starvation` takes the max of hunger and the blink). Shed mass is not score (`eatenMass` untouched); hits alone never end a run, they bring starvation closer. `Dangers.onHit` drives camera shake, the new `hit` sound (`Sfx.hit`: thud, crunch and a dissonant sting, `AUDIO.hit`) and the shed burst.
+  - `src/effects/ShedBurst.ts` + `shaders/shedBurst.{vert,frag}.glsl`: 96 pooled glowing points (32 per hit) thrown off the disk, leaning the knock direction, cooling from orange to red. On OVERLAY_LAYER (drawn after the lens, unbent).
+  - Comets (`src/entities/CometField.ts`, `COMETS` in config, a `comets` table per tier in `tiers.ts`): pool of 3 on a per-tier timer (`firstDelay`, `interval`); they enter on a ring 1.3 camera distances out, aimed within 0.3 of the hole, and fly a straight line at 0.45 to 0.75 camera distances per second; recycled once 1.8 out and moving away. The nucleus is a PreyMesh instance (dark icy colours), so an edible comet is eaten and spaghettifies like prey ("You ate a comet"); an inedible one hits like a body with the knockback leaning along its travel. Tail: one instanced flat quad per comet (`shaders/cometTail.{vert,frag}.glsl`) with a streaky blue ion tail, a broader bent dust tail and a coma, additive, on OVERLAY_LAYER. Nucleus radii stay asteroid-sized (0.8 to 1.4, 4 to 9, 6 to 14), so comets are hazards early in each tier and food later.
+  - Overlaps (old known bug): live bodies are pushed apart every frame (mass weighted, `separationRate`, O(n^2) over at most 80, no allocations); spawns try `spawnTries` positions clear of other bodies, and bodies the hole cannot eat spawn outside their pull reach where the spawn ring allows (huge ones land on its outer edge).
+  - Debug handle: `dangers`, `comets`, `shedBurst`. The speed test turns dangers off (`dangers.enabled`).
+  - Tests (28 pass, plus 9 server tests): pull with no input drifts the hole toward a body and holding away escapes; a collision knocks back, sheds mass but not score, sparks, shakes and plays the hit sound once; an invulnerable second contact pushes out with no loss; a later hit never goes below the floor margin; overlapping bodies separate; a table comet spawns on the ring heading in at the table speed; a launched comet crosses on a straight line and is recycled; one aimed at the hole hits it; a small one is eaten.
+  - Judged by real-GPU stills: comet tail and coma, the shed spray. Not judged in motion by a human.
+
 ## In progress
 (nothing)
 
@@ -223,6 +235,10 @@ Suggested model/effort in brackets.
 - 2026-10-09: Score caps are deliberately loose (largest prey of the tier twice a second). They stop edited requests with absurd numbers, not skilled play. Tighten in `LEADERBOARD` if the board fills with fakes.
 - 2026-10-09: Analytics loads from a module (not a static tag in index.html) so dev, preview, the local container and tests never send events, same as Rex Chase. Default subdomain `spaghettify.swikrut.com`.
 
+- 2026-10-09: Comets reuse the prey mesh and infall code (PreyMesh) instead of a separate entity type, so an edible comet spaghettifies for free. Their tails and the shed sparks are drawn after the lens (OVERLAY_LAYER): on layer 0 the lens treated glow on the play plane as far background and bent it into hard-edged ghosts around the nucleus.
+- 2026-10-09: Danger strength is relative to the hole's steering authority, so the same numbers feel the same from a pea to a planet, and the total pull is capped below it, so the hole can always escape. Hits clamp above the hunger floor: collisions punish by bringing starvation closer, never by ending the run outright.
+- 2026-10-09: Comets ignore other bodies (they pass over them) and only the hole collides with them. Keeps them on a readable straight line.
+
 ## Known bugs
 - Leaderboard: anyone can post under someone else's nickname; the best run wins either way. No admin UI (DEPLOY.md has a one-line delete). The nickname filter is English-centric and small. Quitting a run from the pause menu does not post it.
 - Leaderboard: the caps were checked against test runs only, not real long runs. If a real run is rejected as implausible, `docker logs spaghettify-api` shows it; loosen `LEADERBOARD.maxMealsPerSecond`.
@@ -230,7 +246,6 @@ Suggested model/effort in brackets.
 - Share: not tried on a real phone. Some share targets drop the text when a file is attached, so the URL is also printed on the card. No og:image yet (a static card image for link previews would need a server-rendered or fixed image).
 - Share: the photo is whatever the camera saw 0.3 s after the record meal; a small record object early in the run, or one that is mostly off screen, gives a plain photo. A later bigger record replaces it.
 - Score screen: the hunger overlay's EVAPORATING text and vignette stay on under the score screen (faintly visible below the buttons). Pre-existing.
-- Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
 - Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score (or post it). The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
 - Touch: scheme changes only take effect from the settings panel; a Chrome pull-to-refresh or iOS Safari edge gestures are not blocked beyond `touch-action: none` on the canvas. No haptics.
 - Menus: the music/drone keeps playing at its last level while paused.
@@ -242,7 +257,9 @@ Suggested model/effort in brackets.
 - Lens: a star exactly behind the hole makes an Einstein ring with faint beads (magnified texels of a small star sprite). Rare and brief.
 - Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. The M4 infall now starts from there, so it reads as being pulled in; judge in playtest.
 - Prey: planets and moons are the same flat-shaded lumpy low-poly rock mesh as asteroids, only coloured per class. Big bodies look like potatoes; needs round smooth bodies (a second mesh type or a per-instance roundness) at the M7 visual pass.
-- Prey: big inert objects overlap each other, and the hole can end up inside one when it drifts into it. Harmless until dangers arrive; spawn clears the hole but nothing separates prey from prey.
+- Dangers: tuned from numbers and stills only (pull 0.45, shed 12 percent, invulnerable 1.2 s, comet timing). Comets pass through other bodies. There is no off-screen warning for an incoming comet; the first one comes 12 s into a run.
+- Dangers: the hole's own growth next to a body can make it touch and take a hit. Edible prey are also pushed around by the body separation.
+- Comets: the tail trails behind the motion (reads well) instead of pointing away from a sun, since the scene has none. The tail is not lensed; near the hole the bent nucleus and the unbent tail can sit slightly apart.
 - Tiers: thresholds (mass 9 and 400), counts (80, 70, 60) and class weights are set from numbers and stills only. The early game may be sparse or a tier too short or long; tune `TIERS` after a playtest.
 - Tests: SwiftShader runs about 3 to 5 fps at 1280x720 with the lens on, so the tier and speed tests use a small viewport. For real performance numbers or screenshots, a scratch spec with `launchOptions.args: ['--use-angle=d3d11', '--ignore-gpu-blocklist']` uses the GPU.
 - Eating uses distance on the XZ plane only (centre within `radius + preyRadius * eatReach`), not true overlap. Big prey that are only edible barely may feel slightly late or early; tune `eatReach`.
@@ -257,4 +274,5 @@ Suggested model/effort in brackets.
 - Hunger pacing: about 16 s from last meal to run end at the start (7 s grace plus roughly 9 s drain). Too harsh or too soft? Tune `HUNGER`. Pause now freezes hunger.
 - Spaghetti feel: infall time (0.35 s to 0.85 s), `maxStretch` 6, `curl` 0.6 and glow strength are set from stills only.
 - Not yet playtested on a phone (touch input exists since M7 part 3). The auto scaler handles render cost; check with `?perf`.
+- Danger feel: is the pull noticeable but fair, is a 12 percent shed too harsh or too soft, do comets need a warning? Tune `DANGER`, `COMETS` and the tier `comets` tables.
 - Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?
