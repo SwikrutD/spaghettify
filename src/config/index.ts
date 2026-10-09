@@ -437,3 +437,15 @@ export const MENU = {
   /** Scheme picked on a touch-first device when nothing is stored yet. */
   defaultTouchScheme: 'finger',
 } as const;
+
+/**
+ * Umami analytics (cookieless, no personal data). Loads only in a production build served from one of
+ * `domains`, so the dev server, `npm run preview`, the local container and tests send nothing.
+ */
+export const ANALYTICS = {
+  src: 'https://cloud.umami.is/script.js',
+  // FILL IN: the website id from cloud.umami.is (Settings > Websites > Add website). Empty turns analytics off.
+  websiteId: '',
+  // FILL IN if the subdomain differs: the public hostname the game is served from.
+  domains: ['spaghettify.swikrut.com'],
+} as const;

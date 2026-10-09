@@ -922,6 +922,19 @@ test('auto quality: default on, steps down on slow frames, probes up once, locks
 });
 
 // Touch: a phone-like context (coarse pointer, touch events). Pointer events come from CDP touch input.
+test('analytics: nothing is loaded or sent off the live domain, and a run still starts', async ({ page }) => {
+  const umami: string[] = [];
+  page.on('request', (r) => {
+    if (r.url().includes('umami')) umami.push(r.url());
+  });
+  await page.goto('/');
+  await page.waitForFunction(() => window.__spaghettify?.frames > 5);
+  await startRun(page);
+  await page.waitForTimeout(500);
+  expect(await page.locator('script[data-website-id]').count()).toBe(0);
+  expect(umami).toEqual([]);
+});
+
 test.describe('touch and gamepad', () => {
   test.use({ hasTouch: true, isMobile: true, viewport: { width: 640, height: 360 } });
 

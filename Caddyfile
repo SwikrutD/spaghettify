@@ -1,0 +1,39 @@
+# Static server for the Vite build. TLS is terminated in front of this (Cloudflare Tunnel or a
+# reverse proxy), so Caddy only speaks plain HTTP inside the container.
+{
+	admin off
+	auto_https off
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+:8080 {
+	root * /srv
+
+	# Vite puts content-hashed files in /assets: safe to cache forever.
+	@hashed path /assets/*
+	header @hashed Cache-Control "public, max-age=31536000, immutable"
+
+	# index.html (and anything else unhashed) must be revalidated so a deploy shows up at once.
+	@unhashed not path /assets/*
+	header @unhashed Cache-Control "no-cache"
+
+	header {
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+		-Server
+	}
+
+	# Precompressed .br/.gz files from scripts/precompress.mjs first, on-the-fly gzip for the rest.
+	encode zstd gzip
+	file_server {
+		precompressed br gzip
+	}
+
+	# Never let a 404 (say, an asset requested mid-deploy) be cached as immutable.
+	handle_errors {
+		header Cache-Control "no-store"
+		respond "{err.status_code} {err.status_text}"
+	}
+}

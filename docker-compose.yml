@@ -1,0 +1,20 @@
+# Local use: `docker compose up -d --build`, then open http://localhost:8095
+# On TrueNAS see deploy/DEPLOY.md (the image is built there and referenced by name).
+services:
+  spaghettify:
+    build: .
+    image: spaghettify:latest
+    container_name: spaghettify
+    restart: unless-stopped
+    ports:
+      - "8095:8080"
+    read_only: true
+    # Caddy keeps nothing worth persisting here, but wants these writable.
+    tmpfs:
+      - /tmp
+      - /config
+      - /data
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE

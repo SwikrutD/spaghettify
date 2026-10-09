@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { HUNGER, JUICE, LIGHTING, QUALITY, RENDER, TIERS } from './config';
+import { initAnalytics, scoreBand, track } from './analytics/analytics';
 import { AudioEngine } from './audio/AudioEngine';
 import { PreyField } from './entities/PreyField';
 import { InputManager } from './input/InputManager';
@@ -23,6 +24,7 @@ import { SettingsPanel } from './ui/SettingsPanel';
 import { TierBanner } from './ui/TierBanner';
 import { loadBest, saveBest, TitleScreen } from './ui/TitleScreen';
 
+initAnalytics();
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
 const scene = new THREE.Scene();
@@ -74,6 +76,13 @@ hunger.onEnd = () => {
     tierTitle: tiers.tier.title,
     eatenCount: player.eatenCount,
     seconds: hunger.runTime,
+  });
+  track('run-end', {
+    band: scoreBand(score),
+    tier: tiers.index + 1,
+    seconds: Math.round(hunger.runTime),
+    eaten: player.eatenCount,
+    newBest,
   });
   refreshMenus();
 };
@@ -166,6 +175,7 @@ function closeSettings(): void {
 title.onPlay = () => {
   title.hide();
   setMode('playing');
+  track('run-start', { from: 'title' });
 };
 title.onSettings = () => {
   title.hide();
@@ -183,6 +193,7 @@ settingsPanel.onClose = closeSettings;
 scoreScreen.onRestart = () => {
   resetRun();
   refreshMenus();
+  track('run-start', { from: 'restart' });
 };
 
 window.addEventListener('keydown', (e) => {

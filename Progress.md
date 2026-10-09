@@ -1,15 +1,17 @@
 # Progress - Spaghettify
 
 ## Next session
-M9 deploy: Dockerfile + docker-compose.yml, TrueNAS Docker app, Cloudflare DNS for a swikrut.com subdomain, Umami analytics. Recommended: Sonnet 5.5, medium (deploy work, per the milestone list). Before that, the user should open the game on a phone with `?perf` (see M8 below) and report the fps and the quality level it settles on; if it settles at level 4 or lower, a short follow-up perf session (Opus 5.5, high) should come before M9.
-How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste the start prompt below.
+Before it, the user does the manual M9 steps in `deploy/DEPLOY.md` (Umami website id, subdomain, image onto TrueNAS, TrueNAS YAML app, Cloudflare Tunnel or DNS) and plays the live site on a phone with `?perf`. If the phone settles at quality level 4 or lower, a short perf session (Opus 5.5, high) comes first.
+
+Then M10 Share card [Sonnet 5.5, medium]: canvas-rendered PNG with score, biggest object eaten and a run screenshot, shared through the Web Share API with a download fallback, from the score screen.
+How to start: `/clear`, then `/model` (Sonnet 5.5, medium), then paste:
 
 ```
-Start Milestone 9 (Docker + TrueNAS deploy + Cloudflare subdomain + Umami) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 10 (share card) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: the game is served from the user's TrueNAS server as a Docker app on a swikrut.com subdomain (DNS in Cloudflare) with Umami analytics like Rex Chase. There is no backend yet, so the container serves the Vite production build (npm run build) with sensible caching (hashed assets long-lived, index.html not cached) and gzip or brotli. Add a Dockerfile and docker-compose.yml at the repo root, document the TrueNAS and Cloudflare steps the user must do by hand, and add the Umami script tag with the site id left as a clearly marked value for the user to fill in. Ask before anything outward-facing.
+Goal: from the score screen the player can share their run. Render a PNG on a canvas with the score, the biggest object eaten ("You ate X", correct names and facts only), the tier reached and a screenshot of the run (grab it from the WebGL canvas at run end, so it needs preserveDrawingBuffer or a capture right after a render). Share it with the Web Share API (files) where supported and fall back to a download. Include the game URL (spaghettify.swikrut.com unless Progress.md says the subdomain changed). Track a `share` event through `track()` in src/analytics/analytics.ts and add it to the events table in deploy/DEPLOY.md. Keep the card on theme (physics, not food) and follow the copy style rules in CLAUDE.md.
 
-Done when: npm run build works, the container builds and serves the game locally, tsc, ESLint and the Playwright smoke tests pass (npm run typecheck, npm run lint, npm test), Progress.md is updated and the work is committed. Note: M8 added `?perf` (frame time readout) and the auto quality scaler; the production build must keep both working.
+Done when: the share card renders and downloads in desktop Chrome, a Playwright test covers the share button (download fallback path, PNG non-empty, no console errors), npm run typecheck, npm run lint and npm test pass, Progress.md is updated and the work is committed.
 ```
 
 ## Milestones
@@ -24,8 +26,10 @@ Suggested model/effort in brackets.
 - [x] M6 Hunger / Hawking evaporation fail state, score screen [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest)
 - [x] M7 Audio, UI, juice, mobile controls [Sonnet 5.5, medium] (2026-10-09, awaiting user playtest; part 1 audio, part 2 menus, part 3 touch, gamepad and juice)
 - [x] M8 Performance pass (pooling, draw calls, phone test) [Opus 5.5, high] (2026-10-09, awaiting a real phone test with `?perf`)
-- [ ] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium]
-- [ ] Post-MVP: more tiers, daily seed, leaderboard, multiplayer
+- [x] M9 Docker + TrueNAS deploy + Cloudflare subdomain + Umami [Sonnet 5.5, medium] (2026-10-09, container done and tested locally; the manual TrueNAS, Cloudflare and Umami steps are the user's)
+- [ ] M10 Share card [Sonnet 5.5, medium]
+- [ ] M11 Global leaderboard (Fastify + SQLite backend in the same compose) [Sonnet 5.5, high]
+- [ ] Later: more tiers, daily seed, multiplayer
 
 ## Done
 - 2026-10-08 M0: Vite + TS + Three.js scaffold, git, ESLint (flat config), Playwright smoke test.
@@ -137,6 +141,13 @@ Suggested model/effort in brackets.
     - A mid-range phone GPU is very roughly 1/8 to 1/15 of this card for this kind of shader, so High should land around 4 to 8 ms on a phone with plenty of room below it. Not verified on a real phone.
   - Tests: new auto quality test (default Auto, step down, probe up once, failed level not retried, a 30 fps cap locks and reverts, a preset stops it, `?perf` readout). `beforeEach` seeds the High preset so SwiftShader slowness cannot make the scaler change level mid-test. Fixed a flaky audio test that also failed before M8 (the hole kept eating refilled tier 2 prey and never starved). 18 tests pass.
 
+- 2026-10-09 M9: deploy container and analytics.
+  - `Dockerfile` (node:22-alpine build: `npm ci`, `npm run build`, `scripts/precompress.mjs` writes .br and .gz; then caddy:2-alpine serving `/srv` on 8080), `Caddyfile`, `docker-compose.yml` (host port 8095, read-only root, tmpfs for /tmp, /config and /data, all caps dropped but NET_BIND_SERVICE), `.dockerignore`.
+  - Caching: `/assets/*` `public, max-age=31536000, immutable`; everything else `no-cache`; error responses `no-store`. Hashed JS goes out as precompressed brotli (639 KB > 135 KB) or gzip. Health check with wget.
+  - Umami: `src/analytics/analytics.ts` (Rex Chase pattern: loads only when `import.meta.env.PROD`, http(s) and hostname in `ANALYTICS.domains`; `track()` never throws). `ANALYTICS` in `src/config/index.ts` with `websiteId: ''` marked FILL IN and domain `spaghettify.swikrut.com`. Events `run-start` (`from`) and `run-end` (`band`, `tier`, `seconds`, `eaten`, `newBest`).
+  - `playwright.config.ts`: `BASE_URL` env runs the suite against a running server instead of the dev server. All 19 tests pass on the dev server and against the container (`BASE_URL=http://localhost:8095`), so `?perf`, the debug handle and auto quality work in the production build. New smoke test: no Umami script or request off the live domain.
+  - `deploy/DEPLOY.md`: Umami setup, docker save/load onto TrueNAS (no git remote yet), TrueNAS Install via YAML block (`pull_policy: never`), Cloudflare Tunnel or proxied DNS, checks, update steps and the analytics event table.
+
 ## In progress
 (nothing)
 
@@ -179,6 +190,10 @@ Suggested model/effort in brackets.
 - 2026-10-09: One quality ladder serves both the auto scaler and the Settings presets. Auto is the default; a manual preset is a fixed choice the scaler never overrides. The scaler steps up only after a long good stretch, never retries a level that failed, and gives up (reverting) when lower quality does not speed frames up, so a 30 fps cap or a CPU-bound device does not end up blurry for nothing.
 - 2026-10-09: Touch-first devices start at level 2 (0.7 resolution) on a first visit so the first seconds do not stutter while the scaler measures; the settled level is remembered for the next visit.
 
+- 2026-10-09: Caddy instead of nginx for the static server: brotli from precompressed files works out of the box (`precompressed br gzip`), the official nginx image has no brotli module. Files are precompressed at build time with Node's zlib, so no extra npm dependency.
+- 2026-10-09: The image reaches TrueNAS by `docker save` / `docker load` because the repo has no git remote. A registry (ghcr.io via GitHub Actions) is the upgrade path once the repo is pushed; not done because it is outward-facing.
+- 2026-10-09: Analytics loads from a module (not a static tag in index.html) so dev, preview, the local container and tests never send events, same as Rex Chase. Default subdomain `spaghettify.swikrut.com`.
+
 ## Known bugs
 - Audio: there is no danger (collision) sound yet because collisions do not exist; the hunger warning pulse is the only danger cue. Add when roaming hazards arrive.
 - Menus: the scene behind the title screen is a frozen start view (no idle drift). Quitting a run does not record its score. The corner pause button is the only HUD control; no keyboard hint for Escape on screen.
@@ -200,6 +215,7 @@ Suggested model/effort in brackets.
 - Perf: half-size bloom (levels 3 to 5) loses most of the soft glow around the photon ring and the inner disk edge; judge by eye. Bloom is now the biggest single pass at High on a portrait phone screen (0.2 of 0.54 ms here).
 - Camera: on a portrait phone the vertical FOV is fixed, so the view is very narrow and the fed disk spans nearly the whole screen width. Gameplay issue for the phone playtest (consider a horizontal FOV floor in `GameCamera.resize`).
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
+- Deploy: not yet live. Umami `websiteId` is empty (analytics off) until the user fills it in; the subdomain is assumed to be `spaghettify.swikrut.com`. Not verified behind Cloudflare. No og:image or meta description yet (worth adding with the share card).
 
 ## Open questions
 - Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.
