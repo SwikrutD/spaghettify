@@ -253,11 +253,12 @@ test('the player swallows a smaller hole: its mass transfers on the hole curve, 
   expect(['eaten', 'over']).toContain(after.victimPhase);
   expect(after.feed).toContain(`Pea ate ${before.prey}`);
 
-  // End the life by hand to see it on the score screen: it counts, and the ladder names the hole.
+  // End the life by hand to see it on the score screen: it counts, and the ladder names the hole. (Below the
+  // evaporation mass it evaporates at once, without waiting out the hunger clock on a slow test machine.)
   await page.evaluate(() => {
     const d = window.__spaghettify;
     d.hunger.enabled = true;
-    d.player.mass = 0.13;
+    d.player.mass = 0.12;
     d.player.setRadius(d.world.focus.radiusForMass());
   });
   await expect(page.getByTestId('score-screen')).toBeVisible({ timeout: 30_000 });

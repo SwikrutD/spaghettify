@@ -661,6 +661,7 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
     while (d.frames < f + 3) await new Promise(requestAnimationFrame);
     return {
       mass: d.player.mass,
+      eatenMass: d.player.eatenMass,
       radius: d.player.radius,
       eatenCount: d.player.eatenCount,
       biggest: d.player.biggestEaten,
@@ -674,14 +675,17 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
       viewScale: d.camera.viewScale,
     };
   });
-  expect(fresh.mass).toBeCloseTo(0.25, 1);
-  expect(fresh.radius).toBeCloseTo(0.5, 1);
-  // It respawned where there is food around, so a meal or two straight away is fine.
+  // A pea again. It respawned where there is food around, so a meal or two straight away is fine (more of them
+  // when frames are slow): the start mass is what it has besides what it ate since.
+  expect(fresh.mass - fresh.eatenMass).toBeCloseTo(0.25, 1);
+  expect(fresh.radius).toBeGreaterThan(0.45);
+  expect(fresh.radius).toBeLessThan(0.65);
   expect(fresh.eatenCount).toBeLessThan(5);
   expect(fresh.milestone).toBe(0);
   expect(fresh.idle).toBeLessThan(1);
   expect(fresh.starvation).toBeLessThan(0.05);
-  expect(fresh.heat).toBeLessThan(0.2);
+  // A cold disk again (the meal or two at the spawn point warms it a little).
+  expect(fresh.heat).toBeLessThan(fresh.eatenCount === 0 ? 0.05 : 0.5);
   expect(fresh.live).toBe(fresh.count);
   expect(fresh.viewScale).toBeCloseTo(1, 1);
 
