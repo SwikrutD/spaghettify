@@ -23,7 +23,8 @@ services:
     cap_add:
       - NET_BIND_SERVICE
 
-  # Leaderboard API, reachable only through Caddy (/api). The SQLite file lives on the volume.
+  # Game server (leaderboard and online arena), reachable only through Caddy (/api and the /ws WebSocket).
+  # The SQLite file lives on the volume.
   api:
     build:
       context: .

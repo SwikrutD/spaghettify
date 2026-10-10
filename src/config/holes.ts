@@ -49,6 +49,13 @@ export const BOTS = {
   /** Radius of a bot that respawns after being eaten, and seconds before it does. */
   respawnRadius: [0.5, 2.5] as readonly [number, number],
   respawnDelay: [2, 6] as readonly [number, number],
+  /**
+   * More bots than the target (players joined a room): a bot whose life ends leaves instead of coming back, and while
+   * there are still too many, every retireAfter seconds the smallest bot no player could see (none within
+   * retireClearViews of their view distance, past the edge of any screen) leaves quietly.
+   */
+  retireAfter: 8,
+  retireClearViews: 2.6,
   /** Per-bot character, drawn at each spawn (uniform in these ranges). */
   temperament: {
     /** 0..1: how readily it hunts smaller holes and how far away it notices them. */

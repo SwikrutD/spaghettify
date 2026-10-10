@@ -14,9 +14,11 @@
   },
   "dependencies": {
     "@fastify/rate-limit": "^10.3.0",
+    "@fastify/websocket": "^11.3.4",
     "fastify": "^5.12.5"
   },
   "devDependencies": {
-    "@types/node": "^24.19.2"
+    "@types/node": "^24.19.2",
+    "@types/ws": "^8.18.2"
   }
 }

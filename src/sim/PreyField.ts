@@ -1,4 +1,4 @@
-import { ARENA, BODIES, DANGER } from '../config/index.ts';
+import { ARENA, BODIES, DANGER, PREY } from '../config/index.ts';
 import { canSwallow, capture, createBody, spawned, type Body } from './body.ts';
 import { SpatialGrid } from './grid.ts';
 import { massOfRadius, viewDistance } from './Hole.ts';
@@ -87,6 +87,9 @@ export class PreyField {
       } else if (obj.position.x * obj.position.x + obj.position.z * obj.position.z > ARENA.radius * ARENA.radius) {
         // Out of the arena (only something outside the rules puts it there): back in somewhere else.
         this.respawn(i, false);
+      } else if (obj.appear < 1) {
+        // A respawned body scales in.
+        obj.appear = Math.min(1, obj.appear + dt / PREY.appearTime);
       }
     }
     this.separate(dt);

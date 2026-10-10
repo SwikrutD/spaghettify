@@ -26,7 +26,12 @@ export type GrainVisitor = (g: Grain) => boolean | void;
 /** A pooled eaten grain falling into its hole (a body, so it spaghettifies like any prey). */
 export interface FieldInfall extends Body {
   active: boolean;
+  /** Field layer of the grain it stands in for (its class and colours). */
+  layer: number;
 }
+
+/** A layer's cell as one number (layer x CELL_STRIDE + cell), as MatterField.changes lists them. */
+export const CELL_STRIDE = 1 << 20;
 
 const NOT_WORKED_OUT = -1;
 /** Born time of the initial field: long ago, so it is fully grown. */
@@ -60,6 +65,8 @@ class Layer {
   /** Cells waiting to grow back, and where the round-robin check left off. */
   readonly waiting: number[] = [];
   cursor = 0;
+  /** Per cell: listed in MatterField.changes since they were last cleared. */
+  readonly changed: Uint8Array;
 
   constructor(def: FieldLayer, index: number) {
     this.def = def;
@@ -78,6 +85,7 @@ class Layer {
     this.epoch = new Uint16Array(cells);
     this.born = new Float32Array(cells);
     this.regrowAt = new Float32Array(cells);
+    this.changed = new Uint8Array(cells);
   }
 
   reset(): void {
@@ -89,6 +97,7 @@ class Layer {
     this.regrowAt.fill(0);
     this.waiting.length = 0;
     this.cursor = 0;
+    this.changed.fill(0);
   }
 
   /** Column (or row) of a coordinate, clamped to the grid. */
@@ -104,6 +113,11 @@ class Layer {
   centreZ(cell: number): number {
     return -ARENA.radius + (Math.floor(cell / this.cols) + 0.5) * this.def.cell;
   }
+
+  /** True if the cell is not as the seed first laid it out (some grain taken, or grown back since). Once true, always true. */
+  dirty(cell: number): boolean {
+    return this.taken[cell] !== 0 || this.epoch[cell] !== 0;
+  }
 }
 
 /**
@@ -118,6 +132,12 @@ class Layer {
 export class MatterField {
   /** Off: no grains anywhere (tests that need an empty arena). */
   enabled = true;
+  /**
+   * On (the server): every cell whose taken grains or epoch change is listed in `changes` (once, as
+   * layer x CELL_STRIDE + cell) until clearChanges(), so what changed can be sent to the clients that see it.
+   */
+  trackChanges = false;
+  readonly changes: number[] = [];
   readonly layers: readonly Layer[];
   readonly infall: FieldInfall[] = [];
   private readonly world: World;
@@ -144,6 +164,7 @@ export class MatterField {
     const r = g.radius + body.radius;
     if (dx * dx + dz * dz >= r * r) return;
     const bit = 1 << g.slot;
+    if ((layer.taken[g.cell] & bit) === 0) this.noteChange(layer, g.cell);
     layer.taken[g.cell] |= bit;
     layer.covered[g.cell] |= bit;
   };
@@ -155,7 +176,7 @@ export class MatterField {
     this.world = world;
     this.layers = FIELD.layers.map((def, i) => new Layer(def, i));
     for (let i = 0; i < FIELD.infallPoolSize; i++) {
-      const body: FieldInfall = Object.assign(createBody(FIELD.layers[0].color), { active: false });
+      const body: FieldInfall = Object.assign(createBody(FIELD.layers[0].color), { active: false, layer: 0 });
       this.infall.push(body);
     }
     this.reset();
@@ -165,6 +186,28 @@ export class MatterField {
   reset(): void {
     for (const layer of this.layers) layer.reset();
     for (const body of this.infall) body.active = false;
+    this.changes.length = 0;
+  }
+
+  /**
+   * A mirror of another world's field (an online client): set a cell's taken grains and epoch to what that world
+   * says (0 and 0 is the cell as the seed laid it out). A new epoch is laid out afresh and grows in from now.
+   */
+  setCell(layerIndex: number, cell: number, taken: number, epoch: number): void {
+    const layer = this.layers[layerIndex];
+    if (layer.epoch[cell] !== epoch) {
+      layer.epoch[cell] = epoch;
+      layer.present[cell] = NOT_WORKED_OUT;
+      layer.born[cell] = epoch === 0 ? LONG_AGO : this.world.time;
+    }
+    layer.taken[cell] = taken;
+    layer.covered[cell] = 0;
+  }
+
+  /** Forget the listed changes (after they were sent). */
+  clearChanges(): void {
+    for (const key of this.changes) this.layers[Math.floor(key / CELL_STRIDE)].changed[key % CELL_STRIDE] = 0;
+    this.changes.length = 0;
   }
 
   /**
@@ -218,6 +261,7 @@ export class MatterField {
   /** Remove a grain (eaten or cleared). Its cell will grow back later. */
   take(g: Grain): void {
     const layer = this.layers[g.layer];
+    this.noteChange(layer, g.cell);
     layer.taken[g.cell] |= 1 << g.slot;
     this.schedule(layer, g.cell);
   }
@@ -326,6 +370,13 @@ export class MatterField {
     return out;
   }
 
+  /** Note a cell whose taken grains or epoch changed (when tracking changes). */
+  private noteChange(layer: Layer, cell: number): void {
+    if (!this.trackChanges || layer.changed[cell] !== 0) return;
+    layer.changed[cell] = 1;
+    this.changes.push(layer.index * CELL_STRIDE + cell);
+  }
+
   /** The cell is missing grains: it may grow back after a while. */
   private schedule(layer: Layer, cell: number): void {
     if (layer.regrowAt[cell] !== 0) return;
@@ -373,6 +424,7 @@ export class MatterField {
 
   /** The cell grows back laid out afresh, except where a body sits on it. */
   private regrow(layer: Layer, cell: number): void {
+    this.noteChange(layer, cell);
     layer.epoch[cell]++;
     layer.present[cell] = NOT_WORKED_OUT;
     layer.taken[cell] = 0;
@@ -413,6 +465,7 @@ export class MatterField {
     }
     const def = this.layers[g.layer].def;
     body.active = true;
+    body.layer = g.layer;
     body.className = def.name;
     body.round = def.round ?? false;
     body.color = def.color;

@@ -16,6 +16,12 @@
 		reverse_proxy {$API_UPSTREAM:api:3000}
 	}
 
+	# The online arena: a WebSocket on the same api server (Caddy passes the upgrade through and keeps the
+	# connection open for as long as the game is played).
+	handle /ws {
+		reverse_proxy {$API_UPSTREAM:api:3000}
+	}
+
 	root * /srv
 
 	# Vite puts content-hashed files in /assets: safe to cache forever.
@@ -23,7 +29,7 @@
 	header @hashed Cache-Control "public, max-age=31536000, immutable"
 
 	# index.html (and anything else unhashed) must be revalidated so a deploy shows up at once.
-	@unhashed not path /assets/* /api/*
+	@unhashed not path /assets/* /api/* /ws
 	header @unhashed Cache-Control "no-cache"
 
 	header {

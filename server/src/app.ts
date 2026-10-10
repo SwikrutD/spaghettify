@@ -1,7 +1,11 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import rateLimit from '@fastify/rate-limit';
-import { LEADERBOARD } from '../../src/config/index.ts';
-import { checkRun } from '../../src/leaderboard/rules.ts';
+import websocket from '@fastify/websocket';
+import { LEADERBOARD, NET } from '../../src/config/index.ts';
+import { checkRun, type RunSubmission } from '../../src/leaderboard/rules.ts';
+import type { PostedLife } from '../../src/protocol/messages.ts';
+import { Rooms, type ArenaOptions } from './arena/Rooms.ts';
+import { registerArena } from './arena/socket.ts';
 import { ScoreStore } from './db.ts';
 
 export interface AppOptions {
@@ -11,18 +15,30 @@ export interface AppOptions {
   submitPerMinute?: number;
   /** All requests per IP per minute. */
   requestsPerMinute?: number;
+  /** Room settings of the online arena (NET.rooms by default; tests make small rooms). */
+  arena?: Partial<ArenaOptions>;
   logger?: boolean;
+}
+
+declare module 'fastify' {
+  interface FastifyInstance {
+    /** The online arena's rooms. */
+    arena: Rooms;
+  }
 }
 
 /** Proxies in front of the api (Caddy, cloudflared) live on private networks; the client is the first address outside them. */
 const TRUSTED_PROXIES = ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '::1', 'fc00::/7'];
 
 /**
- * The leaderboard API. All routes live under /api (Caddy forwards the path unchanged).
+ * The game server. All HTTP routes live under /api (Caddy forwards the path unchanged):
  *   POST /api/scores               submit a run; returns the player's rank by their best run
  *   GET  /api/scores/top?limit=n   best run per player, highest first
  *   GET  /api/scores/rank?score=n  where a score would place (for players without a nickname)
+ *   GET  /api/online               players online and rooms open
  *   GET  /api/health
+ * and the online arena is a WebSocket at NET.path (/ws, see arena/socket.ts), whose rooms post the lives they score
+ * to the same leaderboard.
  */
 export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
   const app = Fastify({
@@ -43,7 +59,29 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
     reply.header('Cache-Control', 'no-store');
   });
 
+  /** Store a run and say where the player's best run now ranks. */
+  const submit = (run: RunSubmission): PostedLife & { nickname: string } => {
+    const previousBest = store.best(run.nickname);
+    store.add(run);
+    const best = Math.max(previousBest, run.score);
+    const { rank, total } = store.rank(best, run.nickname);
+    return { nickname: run.nickname, rank, total, best, personalBest: run.score > previousBest };
+  };
+
+  // The online arena: lives are scored by the server and posted straight to the board (no caps: it saw them).
+  await app.register(websocket, { options: { maxPayload: NET.limits.maxMessageBytes } });
+  const rooms = new Rooms({ onError: (error, room) => app.log.error({ err: error, room: room.id }, 'room failed'), ...options.arena }, (run) => {
+    const { rank, total, best, personalBest } = submit(run);
+    return { rank, total, best, personalBest };
+  });
+  app.decorate('arena', rooms);
+  registerArena(app, rooms);
+  app.addHook('onReady', async () => rooms.start());
+  app.addHook('onClose', async () => rooms.stop());
+
   app.get('/api/health', async () => ({ ok: true }));
+
+  app.get('/api/online', async () => ({ players: rooms.players, rooms: rooms.rooms.length }));
 
   app.post(
     '/api/scores',
@@ -54,12 +92,7 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
         req.log.info({ reason: check.reason }, 'score rejected');
         return reply.code(check.reason === 'invalid' ? 400 : 422).send({ error: check.reason });
       }
-      const run = check.run;
-      const previousBest = store.best(run.nickname);
-      store.add(run);
-      const best = Math.max(previousBest, run.score);
-      const { rank, total } = store.rank(best, run.nickname);
-      return reply.code(201).send({ nickname: run.nickname, rank, total, best, personalBest: run.score > previousBest });
+      return reply.code(201).send(submit(check.run));
     },
   );
 

@@ -22,6 +22,12 @@ export interface WorldOptions {
   tickRate?: number;
   /** Bot holes the arena keeps (0 by default: the client and server ask for BOTS.count). */
   bots?: number;
+  /**
+   * True (the default) for the client's own arena: `focus` is the local player's hole, in the arena from the start.
+   * False for a server room: no hole of its own (`focus` is a spare hole that never enters the arena); every hole
+   * comes from addHole (players) or the bot target.
+   */
+  local?: boolean;
 }
 
 /**
@@ -37,8 +43,10 @@ export class World {
   readonly seed: number;
   readonly rng: Rng;
   readonly holes: Hole[] = [];
-  /** The local player's hole (the first one). Nothing in the rules depends on it. */
+  /** The local player's hole (the first one). Nothing in the rules depends on it. Outside the arena when `local` is false. */
   readonly focus: Hole;
+  /** Whether `focus` is in the arena (see WorldOptions.local). */
+  readonly local: boolean;
   readonly field: MatterField;
   readonly prey: PreyField;
   readonly comets: CometField;
@@ -53,6 +61,8 @@ export class World {
   tick = 0;
   time = 0;
   private nextId = 0;
+  /** Seconds the arena has had more bots than its target with none of them free to leave yet. */
+  private surplusTime = 0;
   private readonly spot = vec2();
   // Scratch state while counting the food around a spawn point.
   private foodHole = 0;
@@ -66,8 +76,9 @@ export class World {
     this.dt = 1 / (options.tickRate ?? SIM.tickRate);
     this.seed = (options.seed ?? 1) >>> 0;
     this.rng = new Rng(this.seed);
+    this.local = options.local ?? true;
     this.focus = new Hole(this.nextId++);
-    this.holes.push(this.focus);
+    if (this.local) this.holes.push(this.focus);
     this.field = new MatterField(this);
     this.prey = new PreyField(this);
     this.comets = new CometField(this);
@@ -88,6 +99,15 @@ export class World {
 
   hole(id: number): Hole | undefined {
     return this.holes.find((h) => h.id === id);
+  }
+
+  /**
+   * Take a hole out of the arena for good (a player who left). Nothing else changes: whatever it was eating keeps
+   * falling, a hole it was swallowing finishes its infall, and its debris stays for anyone to eat.
+   */
+  removeHole(hole: Hole): void {
+    const i = this.holes.indexOf(hole);
+    if (i >= 0) this.holes.splice(i, 1);
   }
 
   /** Advance one fixed step. */
@@ -160,28 +180,29 @@ export class World {
   }
 
   /**
-   * A fresh arena: the focus hole starts a new life at the centre, other holes leave (the bots come back as new
-   * ones, up to the bot target), the field grows back in full, bodies are scattered anew and the start is cleared of
-   * anything the hole cannot eat. The random stream carries on.
+   * A fresh arena: the focus hole (if local) starts a new life at the centre, other holes leave (the bots come back
+   * as new ones, up to the bot target), the field grows back in full, bodies are scattered anew and the start is
+   * cleared of anything the hole cannot eat. The random stream carries on.
    */
   reset(): void {
     this.holes.length = 0;
-    this.holes.push(this.focus);
+    if (this.local) this.holes.push(this.focus);
     this.events.length = 0;
     this.tick = 0;
     this.time = 0;
-    this.focus.reset();
+    this.surplusTime = 0;
+    if (this.local) this.focus.reset();
     this.field.reset();
     this.prey.reset();
     this.comets.reset();
     this.debris.reset();
-    this.clearStart(this.focus);
+    if (this.local) this.clearStart(this.focus);
     this.keepBots(0);
   }
 
   /** Start a new life for a hole in the running arena: at a clear spawn point, as a fresh pea (or `radius`), protected for a moment. */
   respawn(hole: Hole, radius: number = PLAYER.startRadius): void {
-    const p = this.spawnPoint(radius, this.spot);
+    const p = this.spawnPoint(radius, this.spot, hole);
     hole.reset(p.x, p.z);
     if (radius > PLAYER.startRadius) {
       hole.setRadius(radius);
@@ -195,9 +216,9 @@ export class World {
    * A place for a hole of this radius to (re)spawn, into `out`: random tries for one out of sight of every other
    * hole (ARENA.holeClearViews of theirs plus its own view), with no body it cannot eat within pulling reach and
    * some food around it. With no such place, the best of the tries (nothing inedible in reach first, then the
-   * furthest from other holes).
+   * furthest from other holes). `self` (the hole that will go there, if it is in the arena already) does not count.
    */
-  spawnPoint(radius: number, out: Vec2): Vec2 {
+  spawnPoint(radius: number, out: Vec2, self: Hole | null = null): Vec2 {
     const rng = this.rng;
     const view = viewDistance(radius);
     const spread = ARENA.radius - ARENA.edgeMargin - Math.max(edgeWidth(radius) * 3, radius * 2);
@@ -211,7 +232,7 @@ export class World {
       const z = Math.sin(a) * d;
       let spare = Infinity;
       for (const hole of this.holes) {
-        if (hole.absent) continue;
+        if (hole.absent || hole === self) continue;
         const clear = ARENA.holeClearViews * viewDistance(hole.radius) + view;
         spare = Math.min(spare, Math.hypot(x - hole.position.x, z - hole.position.z) - clear);
       }
@@ -278,13 +299,22 @@ export class World {
     if (!protect) hole.protection = 0;
   }
 
-  /** Keep the arena at its bot target: add the missing ones, and bring back bots whose life ended once their delay is up. */
+  /**
+   * Keep the arena at its bot target: add the missing ones, and bring back bots whose life ended once their delay is
+   * up. With more bots than the target (players joined a server room) bots step aside: one whose life is over leaves
+   * instead of coming back, and while that is not enough, every BOTS.retireAfter seconds the smallest bot out of every
+   * player's sight leaves quietly.
+   */
   private keepBots(dt: number): void {
     let count = 0;
+    for (const hole of this.holes) if (hole.bot) count++;
+    if (count > this.botTarget) {
+      count -= this.retireBots(count - this.botTarget, dt);
+    } else {
+      this.surplusTime = 0;
+    }
     for (const hole of this.holes) {
-      if (!hole.bot) continue;
-      count++;
-      if (hole.phase !== 'over') continue;
+      if (!hole.bot || hole.phase !== 'over') continue;
       hole.respawnIn -= dt;
       if (hole.respawnIn <= 0) this.startBot(hole, BOTS.respawnRadius, true);
     }
@@ -293,6 +323,47 @@ export class World {
       this.addBot(this.tick === 0 ? BOTS.initialRadius : BOTS.respawnRadius, this.tick !== 0);
       count++;
     }
+  }
+
+  /** Remove up to `surplus` bots: first those whose life is over, then (after a while) one nobody can see. Returns how many left. */
+  private retireBots(surplus: number, dt: number): number {
+    let gone = 0;
+    for (let i = this.holes.length - 1; i >= 0 && gone < surplus; i--) {
+      const hole = this.holes[i];
+      if (hole.bot && hole.phase === 'over') {
+        this.holes.splice(i, 1);
+        gone++;
+      }
+    }
+    if (gone >= surplus) {
+      this.surplusTime = 0;
+      return gone;
+    }
+    this.surplusTime += dt;
+    if (this.surplusTime < BOTS.retireAfter) return gone;
+    let pick: Hole | null = null;
+    for (const hole of this.holes) {
+      if (!hole.bot || hole.phase !== 'playing' || (pick && hole.radius >= pick.radius) || this.watched(hole)) continue;
+      pick = hole;
+    }
+    if (pick) {
+      this.removeHole(pick);
+      gone++;
+      this.surplusTime = 0;
+    }
+    return gone;
+  }
+
+  /** True if a hole that is not a bot could see `hole` (it is within BOTS.retireClearViews of that hole's view distance). */
+  private watched(hole: Hole): boolean {
+    for (const other of this.holes) {
+      if (other.bot || other === hole) continue;
+      const clear = BOTS.retireClearViews * viewDistance(other.radius) + hole.radius * 3;
+      const dx = other.position.x - hole.position.x;
+      const dz = other.position.z - hole.position.z;
+      if (dx * dx + dz * dz < clear * clear) return true;
+    }
+    return false;
   }
 
   private died(hole: Hole): void {

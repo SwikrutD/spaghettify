@@ -15,5 +15,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src", "test", "../src/leaderboard/rules.ts", "../src/sim"]
+  "include": ["src", "test", "../src/leaderboard/rules.ts", "../src/sim", "../src/protocol"]
 }

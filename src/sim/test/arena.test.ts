@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ARENA, BODIES, DANGER } from '../../config/index.ts';
+import { ARENA, BODIES, DANGER, PREY } from '../../config/index.ts';
 import { edgeWidth } from '../arena.ts';
 import { canSwallow } from '../body.ts';
 import { holeMassForRadius, topSpeed, viewDistance } from '../Hole.ts';
@@ -54,10 +54,14 @@ test('eaten bodies respawn across the whole arena, out of sight of every hole', 
     body.position.z = a.position.z;
     run(world, 1, () => holdComets(world));
     assert.equal(body.state, 'alive');
+    // It scales in from nothing (it used to stay at scale 0: there but never drawn).
+    assert.ok(body.appear > 0, 'a respawned body scales in');
     for (const hole of [a, b]) assert.ok(distance(body, hole) > ARENA.holeClearViews * viewDistance(hole.radius) + body.radius - 1e-9);
     places.push({ x: body.position.x, z: body.position.z });
     setMass(a, a.startMass);
   }
+  run(world, PREY.appearTime + 0.05, () => holdComets(world));
+  assert.equal(body.appear, 1);
   // Spread over the arena: far from the eater and far from each other on average.
   const meanDist = places.reduce((s, p) => s + Math.hypot(p.x, p.z), 0) / places.length;
   assert.ok(meanDist > ARENA.radius * 0.4, `${meanDist}`);

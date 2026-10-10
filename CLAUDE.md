@@ -95,8 +95,8 @@ Rough guide for choosing: Sonnet 5.5 at medium for scaffolding, UI, audio and de
 - Physics: simple custom 2.5D gravity and collision; no heavy physics engine unless clearly needed
 - Audio: Web Audio API
 - Backend: Node (Fastify) + SQLite, packaged as a Docker container. Leaderboard accepts an anonymous nickname only (no accounts), with basic validation and rate limiting.
-- Multiplayer: WebSockets from the same Node server. Server-authoritative simulation at a fixed tick (around 20 to 30 Hz) running the same simulation code as the client. Clients send only their movement vector and receive compact snapshots of what is near them (interest management). The client predicts its own hole and interpolates everyone else. Bots run on the server in online rooms.
-- Simulation code lives in `src/sim/`: pure TypeScript with no three.js, DOM or browser imports, fixed timestep, deterministic given a seed. Both the game and the server import it, so it follows the server's rules (erasable TS only, `.ts` import extensions; see `Progress.md`). Rendering, audio and UI only read sim state and sim events.
+- Multiplayer: WebSockets from the same Node server (`/ws`). Server-authoritative: each room steps the same simulation code as the client at its fixed 60 Hz and sends snapshots at 20 Hz (decided in M18, see `Progress.md`). Clients send only their movement vector and receive compact binary snapshots of what is near them (interest management). The client predicts its own hole and interpolates everyone else. Bots run on the server in online rooms.
+- Simulation code lives in `src/sim/`: pure TypeScript with no three.js, DOM or browser imports, fixed timestep, deterministic given a seed. Both the game and the server import it, so it follows the server's rules (erasable TS only, `.ts` import extensions; see `Progress.md`). Rendering, audio and UI only read sim state and sim events. The online protocol (`src/protocol/`) is shared the same way.
 - Frontend must work on its own; the server is additive. If it is unreachable the game falls back to a local offline arena with bots only, and says so on screen.
 
 ## Quality and testing

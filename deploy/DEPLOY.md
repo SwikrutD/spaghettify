@@ -3,12 +3,12 @@
 Two containers from one `Dockerfile`, run together by `docker-compose.yml`:
 
 - **`spaghettify`** (image `spaghettify:latest`, the default build target `web`): Caddy serving the Vite
-  build and proxying `/api/*` to the api container. Listens on 8080 inside, published on host port 8095
-  (change it freely). This is the only container Cloudflare talks to.
-- **`api`** (image `spaghettify-api:latest`, target `api`): the leaderboard, Fastify on Node 24 with the
-  built-in SQLite. Listens on 3000 on the compose network only (no published port). Its database file is
-  `/data/leaderboard.db` on a volume. If it is down, the game still plays; the score screen says the
-  leaderboard is unavailable.
+  build and proxying `/api/*` and the `/ws` WebSocket to the api container. Listens on 8080 inside,
+  published on host port 8095 (change it freely). This is the only container Cloudflare talks to.
+- **`api`** (image `spaghettify-api:latest`, target `api`): the game server, Fastify on Node 24 with the
+  built-in SQLite: the leaderboard and the online arena (rooms running the shared simulation). Listens on
+  3000 on the compose network only (no published port). Its database file is `/data/leaderboard.db` on a
+  volume. If it is down, the game still plays; the score screen says the leaderboard is unavailable.
 
 TLS is not handled by the containers: Cloudflare (Tunnel or proxy) sits in front of them.
 
@@ -22,7 +22,13 @@ What the web image does:
 
 What the api does:
 
-- `POST /api/scores`, `GET /api/scores/top`, `GET /api/scores/rank?score=n`, `GET /api/health`, all `no-store`.
+- `POST /api/scores`, `GET /api/scores/top`, `GET /api/scores/rank?score=n`, `GET /api/online` (players and
+  rooms), `GET /api/health`, all `no-store`.
+- The online arena on the WebSocket `/ws`: up to 8 rooms of 12 holes (bots fill what players do not), one
+  simulation step 60 times a second per room and a snapshot of what is near each player 20 times a second
+  (about 2 KB/s per player; a full room is a few percent of one CPU core). Lives played online are scored by
+  the server and posted to the board under the player's nickname. Limits per connection and per IP are in
+  `NET.limits` (`src/config/net.ts`).
 - Light anti-cheat: 6 score submissions and 120 requests per minute per client IP, score sanity caps from
   the run time and the size milestones, a nickname filter (shared rules in `src/leaderboard/rules.ts`).
 - The client IP is taken from `X-Forwarded-For` only through proxies on private addresses (Caddy,
@@ -140,6 +146,8 @@ The proxy forwards `spaghettify.swikrut.com` to `http://<truenas-ip>:8095`.
 
 Cloudflare settings worth checking for this hostname:
 
+- WebSockets must be on (Network > WebSockets; on by default, and a Tunnel carries them as they are).
+
 - Leave Rocket Loader off (it rewrites script tags and can break the module script).
 - No cache rule is needed: Cloudflare caches the `.js` assets and honours the origin `Cache-Control`;
   HTML is not cached by default, which is what we want.
@@ -155,6 +163,9 @@ curl -sI -H "Accept-Encoding: br" https://spaghettify.swikrut.com/assets/<file>.
 ```
 curl -s https://spaghettify.swikrut.com/api/health                              # {"ok":true}
 curl -s https://spaghettify.swikrut.com/api/scores/top                          # {"entries":[...],"total":n}
+curl -s https://spaghettify.swikrut.com/api/online                              # {"players":n,"rooms":n}
+curl -si -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
+  -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" https://spaghettify.swikrut.com/ws | head -1   # 101 Switching Protocols
 ```
 
 Open the site, play a run and check Umami's Realtime view shows the visit and a `run-start` event.

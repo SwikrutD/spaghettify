@@ -2,6 +2,7 @@
 
 export * from './arena.ts';
 export * from './holes.ts';
+export * from './net.ts';
 export * from './quality.ts';
 
 /** The shared simulation (src/sim). The client renders between steps, interpolating positions. */
