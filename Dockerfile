@@ -11,8 +11,8 @@ COPY . .
 RUN npm run build && node scripts/precompress.mjs dist
 
 # Leaderboard API. Node 24 runs the TypeScript sources directly (type stripping) and has SQLite built
-# in, so there is no compile step and no native module. The rules and tunables it shares with the game
-# come from src/ (the root package.json is copied for its "type": "module").
+# in, so there is no compile step and no native module. The rules, tunables and simulation it shares with
+# the game come from src/ (the root package.json is copied for its "type": "module").
 FROM node:24-alpine AS api
 ENV NODE_ENV=production PORT=3000 DB_PATH=/data/leaderboard.db
 WORKDIR /app
@@ -21,6 +21,7 @@ COPY server/package.json server/package-lock.json server/
 RUN cd server && npm ci --omit=dev --no-audit --no-fund && npm cache clean --force
 COPY server/src server/src
 COPY src/config src/config
+COPY src/sim src/sim
 COPY src/leaderboard/rules.ts src/leaderboard/
 RUN mkdir -p /data && chown node:node /data
 USER node

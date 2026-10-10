@@ -10,7 +10,6 @@ export class DebrisMesh {
 
   constructor(field: DebrisField) {
     this.field = field;
-    this.mesh.mesh.count = DEBRIS.poolSize;
   }
 
   /** The instanced mesh; add it to the scene. */
@@ -19,18 +18,8 @@ export class DebrisMesh {
   }
 
   update(frame: BodyFrame): void {
-    this.mesh.setHole(frame);
-    const objects = this.field.objects;
-    for (let i = 0; i < objects.length; i++) {
-      const frag = objects[i];
-      if (!frag.active) {
-        this.mesh.hide(i);
-        this.mesh.setHeat(i, 0);
-        continue;
-      }
-      this.mesh.write(i, frag, frame);
-      this.mesh.setHeat(i, frag.heat);
-    }
-    this.mesh.commit();
+    this.mesh.begin(frame);
+    for (const frag of this.field.objects) if (frag.active) this.mesh.add(frag, frame, frag.heat);
+    this.mesh.end();
   }
 }

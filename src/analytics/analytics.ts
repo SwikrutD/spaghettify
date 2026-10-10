@@ -32,7 +32,8 @@ export function track(name: string, data?: Record<string, string | number | bool
 
 /** Group scores so reports read as a distribution rather than thousands of distinct values. */
 export function scoreBand(score: number): string {
-  const edges = [100, 250, 500, 1000, 2500, 5000, 10000, 25000, 50000, 100000];
+  // Scores are peak mass in points and span about seven decades (a few hundred for a pea, billions for a gas giant eater).
+  const edges = [100, 300, 1e3, 3e3, 1e4, 3e4, 1e5, 3e5, 1e6, 3e6, 1e7, 3e7, 1e8, 3e8, 1e9];
   for (let i = 0; i < edges.length; i++) if (score < edges[i]) return `${i ? edges[i - 1] : 0}-${edges[i] - 1}`;
   return `${edges[edges.length - 1]}+`;
 }

@@ -53,3 +53,10 @@ export class Rng {
 export function hash01(seed: number, channel: number): number {
   return mix((seed + Math.imul(channel + 1, 0x9e3779b9)) >>> 0) / 4294967296;
 }
+
+/** A well mixed 32-bit value from four integers, with no stream state (procedural content: the same inputs, the same value). */
+export function hash4(a: number, b: number, c: number, d: number): number {
+  let h = mix((a ^ Math.imul(b, 0x9e3779b9)) >>> 0);
+  h = mix((h ^ Math.imul(c, 0x85ebca6b)) >>> 0);
+  return mix((h ^ Math.imul(d, 0xc2b2ae35)) >>> 0);
+}

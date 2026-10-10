@@ -30,8 +30,8 @@ export class Sfx {
     G.freqs.forEach((f, i) => this.tone('sine', f, f, 0.35, G.level, i * G.noteGap, 0.01));
   }
 
-  tierUp(): void {
-    const T = AUDIO.tierUp;
+  milestone(): void {
+    const T = AUDIO.milestone;
     this.tone('sawtooth', T.sweepFrom, T.sweepTo, T.sweepTime, T.level * 0.5, 0, 0.05, 900);
     this.puff(T.sweepTime, 2000, T.level * 0.4, 0, 'highpass');
     T.chord.forEach((f, i) => {

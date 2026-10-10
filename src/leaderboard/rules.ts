@@ -1,12 +1,14 @@
 // Leaderboard rules shared by the game and the server (server/ imports this file directly and runs it
 // with Node's type stripping), so: no DOM, erasable TypeScript only and `.ts` import extensions.
-import { GROWTH, HUNGER, LEADERBOARD, MENU, PLAYER, TIERS } from '../config/index.ts';
+import { GROWTH, HUNGER, LEADERBOARD, MENU, MILESTONES, PLAYER } from '../config/index.ts';
+import { MILESTONE_MASSES } from '../sim/milestones.ts';
 
-/** What the game submits at the end of a run. */
+/** What the game submits at the end of a life. */
 export interface RunSubmission {
   nickname: string;
+  /** Peak mass gained over the start mass, in points (see HUNGER.pointsPerMass). */
   score: number;
-  /** Highest tier reached, 1-based as shown to the player. */
+  /** Highest size milestone reached, 1-based as shown to the player (the field keeps its old name). */
   tier: number;
   seconds: number;
   eaten: number;
@@ -57,22 +59,16 @@ export function isProfane(raw: string): boolean {
 
 const START_MASS = GROWTH.massDensity * Math.pow(PLAYER.startRadius, GROWTH.massExponent);
 
-/** Mass of the largest prey in a tier's table (1-based tier). */
-export function largestMealMass(tier: number): number {
-  const classes = TIERS[tier - 1].classes;
-  const radius = Math.max(...classes.map((c) => c.radius[1]));
-  return GROWTH.massDensity * Math.pow(radius, GROWTH.massExponent);
+/** Highest score a life of this length can plausibly reach: the start mass doubled every few seconds, up to a cap. */
+export function maxScore(seconds: number): number {
+  const doublings = Math.min(seconds / LEADERBOARD.doublingSeconds, 60);
+  const peak = Math.min(LEADERBOARD.maxPeakMass, START_MASS * Math.pow(2, doublings));
+  return Math.ceil(HUNGER.pointsPerMass * (peak - START_MASS));
 }
 
-/** Highest score a run of this length and tier can plausibly reach. */
-export function maxScore(tier: number, seconds: number, eaten: number): number {
-  const meals = Math.min(LEADERBOARD.maxMealsPerSecond * seconds + LEADERBOARD.mealSlack, eaten);
-  return Math.ceil(HUNGER.pointsPerMass * largestMealMass(tier) * meals);
-}
-
-/** Lowest score that can have reached this tier (its threshold mass, minus the starting mass, eaten). */
-export function minScore(tier: number): number {
-  const needed = Math.max(0, TIERS[tier - 1].minMass - START_MASS);
+/** Lowest score that can have reached this milestone (1-based): its mass, over the start mass. */
+export function minScore(milestone: number): number {
+  const needed = Math.max(0, MILESTONE_MASSES[milestone - 1] - START_MASS);
   return Math.floor(HUNGER.pointsPerMass * needed * (1 - LEADERBOARD.thresholdTolerance));
 }
 
@@ -88,7 +84,7 @@ export function checkRun(input: unknown): RunCheck {
   const { nickname, score, tier, seconds, eaten } = r;
   if (typeof nickname !== 'string' || nickname.length > 64) return { ok: false, reason: 'invalid' };
   if (!Number.isSafeInteger(score) || (score as number) < 0) return { ok: false, reason: 'invalid' };
-  if (!Number.isInteger(tier) || (tier as number) < 1 || (tier as number) > TIERS.length) return { ok: false, reason: 'invalid' };
+  if (!Number.isInteger(tier) || (tier as number) < 1 || (tier as number) > MILESTONES.length) return { ok: false, reason: 'invalid' };
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return { ok: false, reason: 'invalid' };
   if (!Number.isSafeInteger(eaten) || (eaten as number) < 0) return { ok: false, reason: 'invalid' };
 
@@ -98,7 +94,7 @@ export function checkRun(input: unknown): RunCheck {
   const run: RunSubmission = { nickname: name, score: score as number, tier: tier as number, seconds, eaten: eaten as number };
   if (run.seconds < LEADERBOARD.minSeconds || run.seconds > LEADERBOARD.maxSeconds) return { ok: false, reason: 'implausible' };
   if (run.eaten > LEADERBOARD.maxEatenPerSecond * run.seconds + LEADERBOARD.mealSlack) return { ok: false, reason: 'implausible' };
-  if (run.score > maxScore(run.tier, run.seconds, run.eaten)) return { ok: false, reason: 'implausible' };
+  if (run.score > maxScore(run.seconds)) return { ok: false, reason: 'implausible' };
   if (run.score < minScore(run.tier)) return { ok: false, reason: 'implausible' };
   return { ok: true, run };
 }

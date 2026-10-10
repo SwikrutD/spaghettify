@@ -1,7 +1,6 @@
-import { DANGER, GROWTH, PLAYER, TIERS } from '../config/index.ts';
+import { CAMERA, COMETS, DANGER, GROWTH, HUNGER, PLAYER } from '../config/index.ts';
 import { Hunger, type RunPhase } from './Hunger.ts';
 import { vec2 } from './vec.ts';
-import { View } from './View.ts';
 
 /** Mass of a body of the given radius. Shared by holes and prey so eating is consistent. */
 export function massOfRadius(radius: number): number {
@@ -13,9 +12,23 @@ export function radiusOfMass(mass: number): number {
   return Math.pow(mass / GROWTH.massDensity, 1 / GROWTH.massExponent);
 }
 
-/** A hole's top speed at a view scale (its view distance over the starting distance): constant on screen. */
-export function topSpeed(viewScale: number): number {
-  return PLAYER.maxSpeed * Math.pow(viewScale, PLAYER.speedExponent);
+/** Mass of a hole of this radius, on the hole's growth curve (radius = startRadius x (mass / startMass) ^ GROWTH.radiusExponent). */
+export function holeMassForRadius(radius: number): number {
+  return massOfRadius(PLAYER.startRadius) * Math.pow(radius / PLAYER.startRadius, 1 / GROWTH.radiusExponent);
+}
+
+/**
+ * How far out a hole of this radius sees: the camera distance that frames it (the view pulls back slower than the
+ * hole grows, so it gets bigger on screen). Gameplay is measured in it too (top speed, comet paths, what counts as
+ * near a hole), always from the radius alone, never from a client's screen shape.
+ */
+export function viewDistance(radius: number): number {
+  return CAMERA.startDistance * Math.pow(radius / PLAYER.startRadius, CAMERA.zoomExponent);
+}
+
+/** A hole's top speed at a radius: it follows the view distance, so the speed on screen holds as it grows. */
+export function topSpeed(radius: number): number {
+  return PLAYER.maxSpeed * Math.pow(viewDistance(radius) / CAMERA.startDistance, PLAYER.speedExponent);
 }
 
 /** Something a hole ate, as the score screen names it ("You ate a moon"). */
@@ -25,8 +38,8 @@ export interface Meal {
 }
 
 /**
- * A black hole on the play plane. The local player is one, driven by `input`; nothing here knows where the
- * input comes from. `radius` is the gameplay radius: it chases the radius implied by `mass` so growth is smooth.
+ * A black hole on the play plane, driven by `input`; nothing here knows where the input comes from (a player or,
+ * later, a bot). `radius` is the gameplay radius: it chases the radius implied by `mass` so growth is smooth.
  */
 export class Hole {
   readonly id: number;
@@ -34,14 +47,17 @@ export class Hole {
   readonly velocity = vec2();
   /** Desired movement on the play plane, length 0..1. Screen up is -z for the local player. */
   readonly input = vec2();
-  /** External acceleration (gravity pull from big bodies), set each step by Dangers. */
+  /** External acceleration (gravity pull from big bodies and the arena edge), set each step by Dangers. */
   readonly pull = vec2();
   radius: number = PLAYER.startRadius;
   mass = massOfRadius(PLAYER.startRadius);
   /** Mass at the start of a life. A hit never takes the hole below it. */
   readonly startMass = this.mass;
-  /** Mass eaten this life (score). Shed debris eaten back does not count. */
+  /** Highest mass of this life: the score. */
+  peakMass = this.mass;
+  /** Mass eaten this life. Shed debris eaten back does not count. */
   eatenMass = 0;
+  /** Meals this life (specks swallowed on the way do not count). */
   eatenCount = 0;
   biggestEaten: Meal | null = null;
   /** Seconds left of a hit's stun: input is ignored and the knockback carries the hole. */
@@ -51,11 +67,12 @@ export class Hole {
   /** Hits taken and mass shed this life. */
   hits = 0;
   shedMass = 0;
-  /** Highest tier index reached this life (it only goes up). */
-  tier = 0;
+  /** Highest size milestone index reached this life (it only goes up). */
+  milestone = 0;
   /** Seconds left of a hit's fast shrink: meanwhile the radius drops to the shed mass at DANGER.shrinkRate. */
   shrink = 0;
-  readonly view: View;
+  /** Seconds until this hole draws its next comet. */
+  cometTimer: number = COMETS.firstDelay;
   readonly hunger: Hunger;
   /** Position and radius at the start of the last step: the renderer interpolates from them. */
   prevX = 0;
@@ -64,7 +81,6 @@ export class Hole {
 
   constructor(id: number) {
     this.id = id;
-    this.view = new View(this.radius, TIERS[0].cameraScale);
     this.hunger = new Hunger(this);
   }
 
@@ -77,14 +93,19 @@ export class Hole {
     return this.hunger.phase === 'playing';
   }
 
+  /** Points for this life: the peak mass gained over the start. */
+  get score(): number {
+    return Math.round((this.peakMass - this.startMass) * HUNGER.pointsPerMass);
+  }
+
   /** Continuous mass-to-radius curve. */
   radiusForMass(): number {
     return PLAYER.startRadius * Math.pow(this.mass / this.startMass, GROWTH.radiusExponent);
   }
 
-  /** Steering, drift and the radius for `dt` game seconds. Input only steers while the hole is in play and not stunned. */
+  /** Steering, drift and the radius for `dt` seconds. Input only steers while the hole is in play and not stunned. */
   move(dt: number): void {
-    const maxSpeed = topSpeed(this.view.viewScale);
+    const maxSpeed = topSpeed(this.radius);
     const stunned = this.stun > 0;
     this.stun = Math.max(0, this.stun - dt);
     const steer = !stunned && this.hunger.phase === 'playing';
@@ -110,14 +131,27 @@ export class Hole {
 
   /**
    * Absorb a meal of the given mass; returns the mass gained. `reclaimed` is the hole's own shed debris: the
-   * mass comes back but it is not score (eatenMass) and never the biggest meal, so bump farming gains nothing.
+   * mass comes back but it is not counted as eaten and never the biggest meal, so bump farming gains nothing.
    */
   eat(preyMass: number, what: Meal | null, reclaimed: boolean): number {
     if (!reclaimed && what && (!this.biggestEaten || what.radius > this.biggestEaten.radius)) this.biggestEaten = what;
-    const gained = preyMass * GROWTH.absorbEfficiency;
-    this.mass += gained;
+    const gained = this.gain(preyMass);
     if (!reclaimed) this.eatenMass += gained;
     this.eatenCount++;
+    return gained;
+  }
+
+  /** Swallow matter on the way (a speck): it adds mass but is not a meal. Returns the mass gained. */
+  absorb(preyMass: number): number {
+    const gained = this.gain(preyMass);
+    this.eatenMass += gained;
+    return gained;
+  }
+
+  private gain(preyMass: number): number {
+    const gained = preyMass * GROWTH.absorbEfficiency;
+    this.mass += gained;
+    if (this.mass > this.peakMass) this.peakMass = this.mass;
     return gained;
   }
 
@@ -132,7 +166,7 @@ export class Hole {
 
   /** A fresh life at (x, z). */
   reset(x = 0, z = 0): void {
-    this.mass = this.startMass;
+    this.mass = this.peakMass = this.startMass;
     this.radius = PLAYER.startRadius;
     this.eatenMass = 0;
     this.eatenCount = 0;
@@ -146,9 +180,9 @@ export class Hole {
     this.invulnerable = 0;
     this.hits = 0;
     this.shedMass = 0;
-    this.tier = 0;
+    this.milestone = 0;
     this.shrink = 0;
-    this.view.reset(this.radius, TIERS[0].cameraScale);
+    this.cometTimer = COMETS.firstDelay;
     this.hunger.reset();
     this.capture();
   }

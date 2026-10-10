@@ -6,8 +6,9 @@ export interface RunStats {
   best: number;
   newBest: boolean;
   biggest: { name: string } | null;
-  tierNumber: number;
-  tierTitle: string;
+  /** Highest size milestone reached (1-based) and its title. */
+  milestoneNumber: number;
+  milestoneTitle: string;
   eatenCount: number;
   seconds: number;
 }
@@ -108,7 +109,7 @@ export class ScoreScreen {
       `<div style="font-size:14px;letter-spacing:0.3em;opacity:0.7">${best}</div>` +
       `<div data-testid="ladder" style="font-size:clamp(22px,4vw,34px);margin:28px 0 20px;text-shadow:0 0 24px rgba(255,190,120,0.8)">${ladderLine(stats.biggest)}</div>` +
       `<div style="display:inline-block;min-width:260px;font-size:16px;text-align:left" data-testid="stats">` +
-      row('Tier reached', `${stats.tierNumber}: ${stats.tierTitle}`) +
+      row('Size reached', stats.milestoneTitle) +
       row('Objects eaten', String(stats.eatenCount)) +
       row('Time', `${mins}:${secs}`) +
       `</div>`;

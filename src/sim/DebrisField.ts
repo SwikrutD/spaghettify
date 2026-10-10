@@ -1,4 +1,4 @@
-import { DEBRIS } from '../config/index.ts';
+import { ARENA, DEBRIS } from '../config/index.ts';
 import { capture, createBody, spawned, type Body } from './body.ts';
 import { radiusOfMass, type Hole } from './Hole.ts';
 import { lerp } from './math.ts';
@@ -19,7 +19,8 @@ export interface Fragment extends Body {
 /**
  * Debris: the mass a hit sheds, thrown out as glowing rock fragments flung away from the contact. They slow
  * down and cool, and after a short delay any hole can eat them (the owner gets mass back but no score; see
- * Hole.eat). Fixed pool; a full pool reuses the oldest fragment.
+ * Hole.eat). Fixed pool shared by the arena; a full pool reuses the oldest fragment. Fragments live out their
+ * lifetime wherever they are, or until they drift out of the arena.
  */
 export class DebrisField {
   readonly objects: Fragment[] = [];
@@ -49,6 +50,11 @@ export class DebrisField {
     let m = 0;
     for (const f of this.objects) if (f.active && f.state === 'alive') m += f.mass;
     return m;
+  }
+
+  /** True if a hole can eat this fragment now (it has cooled past the pickup delay). */
+  edible(frag: Fragment): boolean {
+    return frag.active && frag.state === 'alive' && frag.age >= DEBRIS.pickupDelay;
   }
 
   reset(): void {
@@ -102,9 +108,8 @@ export class DebrisField {
 
   update(dt: number): void {
     const D = DEBRIS;
-    const focus = this.world.focus;
     const drag = Math.exp(-D.drag * dt);
-    const despawnSq = (D.despawnDistance * focus.view.targetDistance) ** 2;
+    const edgeSq = ARENA.radius * ARENA.radius;
     for (const frag of this.objects) {
       if (!frag.active) continue;
       frag.age += dt;
@@ -119,15 +124,13 @@ export class DebrisField {
       frag.velocity.x *= drag;
       frag.velocity.z *= drag;
       frag.heat = Math.exp(-D.coolRate * frag.age);
-      const dx = frag.position.x - focus.position.x;
-      const dz = frag.position.z - focus.position.z;
+      const p = frag.position;
       const left = D.lifetime - frag.age;
-      if (left <= 0 || dx * dx + dz * dz > despawnSq) {
+      if (left <= 0 || p.x * p.x + p.z * p.z > edgeSq) {
         frag.active = false;
         continue;
       }
       frag.appear = Math.min(1, left / D.fadeTime);
-      if (frag.age >= D.pickupDelay) this.world.feedOn(frag, frag.ownerId);
     }
   }
 

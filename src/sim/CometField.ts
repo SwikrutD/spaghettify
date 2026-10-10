@@ -1,6 +1,6 @@
-import { COMETS, type Tier } from '../config/index.ts';
+import { ARENA, COMETS } from '../config/index.ts';
 import { capture, createBody, spawned, type Body } from './body.ts';
-import { massOfRadius } from './Hole.ts';
+import { massOfRadius, viewDistance, type Hole } from './Hole.ts';
 import type { World } from './World.ts';
 
 /** A pooled comet: an icy nucleus (a body, so it spaghettifies when eaten) that the renderer gives a tail. */
@@ -12,23 +12,19 @@ export interface Comet extends Body {
 }
 
 /**
- * Comets, the roaming hazard: they enter just off screen on a timer from the focus hole's tier `comets` table
- * and cross the view on a straight line. One a hole cannot eat knocks it back (see Dangers); once a hole is
- * big enough it is a fast meal. Fixed pool.
+ * Comets, the roaming hazard. Every hole in play draws one now and then (its own timer): it enters just outside
+ * that hole's view and crosses it on a straight line, sized for that hole. One a hole cannot eat knocks it back
+ * (see Dangers); a small one is a fast meal, for any hole. A comet is gone once it is far from every hole and
+ * heading away from all of them, or out of the arena. Fixed pool shared by the arena.
  */
 export class CometField {
   readonly objects: Comet[] = [];
-  /** Comets launched this run (tests). */
+  /** Comets launched since the last reset (tests). */
   launched = 0;
   private readonly world: World;
-  private tier: Tier;
-  /** Seconds until the next comet. */
-  private timer: number;
 
-  constructor(world: World, tier: Tier) {
+  constructor(world: World) {
     this.world = world;
-    this.tier = tier;
-    this.timer = tier.comets.firstDelay;
     for (let i = 0; i < COMETS.poolSize; i++) {
       const comet: Comet = Object.assign(createBody(COMETS.color), { active: false, fade: 0 });
       comet.className = 'comet';
@@ -36,25 +32,17 @@ export class CometField {
     }
   }
 
-  setTier(tier: Tier): void {
-    this.tier = tier;
-    this.timer = Math.min(this.timer, tier.comets.firstDelay);
-  }
-
-  /** Start of a new run: no comets, first one after the tier's delay. */
-  reset(tier: Tier): void {
-    this.tier = tier;
-    this.timer = tier.comets.firstDelay;
+  /** No comets out; every hole waits the first delay again. */
+  reset(): void {
     this.launched = 0;
     for (const comet of this.objects) comet.active = false;
+    for (const hole of this.world.holes) hole.cometTimer = COMETS.firstDelay;
   }
 
-  /** Launch a comet from the tier's table: enters on the spawn ring, aimed near the focus hole. */
-  spawn(): Comet | null {
-    const c = this.tier.comets;
+  /** Launch a comet at `hole`: it enters on a ring just outside the hole's view, aimed near it. Null when the pool is full. */
+  spawn(hole: Hole): Comet | null {
     const rng = this.world.rng;
-    const hole = this.world.focus;
-    const view = hole.view.targetDistance;
+    const view = viewDistance(hole.radius);
     const p = hole.position;
     const angle = rng.next() * Math.PI * 2;
     const x = p.x + Math.cos(angle) * COMETS.spawnDistance * view;
@@ -63,8 +51,10 @@ export class CometField {
     const aim = Math.sqrt(rng.next()) * COMETS.aimSpread * view;
     const dx = p.x + Math.cos(aimAngle) * aim - x;
     const dz = p.z + Math.sin(aimAngle) * aim - z;
-    const speed = (rng.range(c.speed[0], c.speed[1]) * view) / Math.max(1e-6, Math.hypot(dx, dz));
-    return this.launch(x, z, dx * speed, dz * speed, rng.logUniform(c.radius[0], c.radius[1]));
+    const speed = (rng.range(COMETS.speed[0], COMETS.speed[1]) * view) / Math.max(1e-6, Math.hypot(dx, dz));
+    const relative = hole.radius * rng.logUniform(COMETS.relRadius[0], COMETS.relRadius[1]);
+    const radius = Math.min(COMETS.maxRadius, Math.max(COMETS.minRadius, relative));
+    return this.launch(x, z, dx * speed, dz * speed, radius);
   }
 
   /** Launch a comet at a given place, velocity (world units per second) and nucleus radius. Null when the pool is full. */
@@ -91,16 +81,16 @@ export class CometField {
   }
 
   update(dt: number): void {
-    const hole = this.world.focus;
-    const despawnSq = (COMETS.despawnDistance * hole.view.targetDistance) ** 2;
-
-    this.timer -= dt;
-    if (this.timer <= 0) {
-      const c = this.tier.comets;
-      this.timer = this.world.rng.range(c.interval[0], c.interval[1]);
-      this.spawn();
+    const rng = this.world.rng;
+    for (const hole of this.world.holes) {
+      if (hole.phase !== 'playing') continue;
+      hole.cometTimer -= dt;
+      if (hole.cometTimer > 0) continue;
+      hole.cometTimer = rng.range(COMETS.interval[0], COMETS.interval[1]);
+      this.spawn(hole);
     }
 
+    const edge = ARENA.radius * 1.5;
     for (const comet of this.objects) {
       if (!comet.active) continue;
       if (comet.state === 'eating') {
@@ -112,14 +102,20 @@ export class CometField {
       comet.position.x += comet.velocity.x * dt;
       comet.position.z += comet.velocity.z * dt;
       comet.fade = Math.min(1, comet.fade + dt / COMETS.appearTime);
+      const p = comet.position;
+      if (p.x * p.x + p.z * p.z > edge * edge || this.leftEveryone(comet)) comet.active = false;
+    }
+  }
+
+  /** True once the comet is far from every hole in play and moving away from each of them. */
+  private leftEveryone(comet: Comet): boolean {
+    for (const hole of this.world.holes) {
+      if (hole.phase === 'over') continue;
       const dx = comet.position.x - hole.position.x;
       const dz = comet.position.z - hole.position.z;
-      // Gone once it is far and heading away.
-      if (dx * dx + dz * dz > despawnSq && dx * comet.velocity.x + dz * comet.velocity.z > 0) {
-        comet.active = false;
-        continue;
-      }
-      this.world.feedOn(comet);
+      const far = COMETS.despawnDistance * viewDistance(hole.radius);
+      if (dx * dx + dz * dz < far * far || dx * comet.velocity.x + dz * comet.velocity.z <= 0) return false;
     }
+    return true;
   }
 }

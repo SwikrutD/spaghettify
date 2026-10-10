@@ -36,15 +36,15 @@ export async function postRunToBoard(panel: LeaderboardPanel, stats: RunStats, n
     return;
   }
 
-  const outcome = await submitRun({ nickname, score: stats.score, tier: stats.tierNumber, seconds: Math.round(stats.seconds * 10) / 10, eaten: stats.eatenCount });
-  track('leaderboard-submit', { result: outcome.status === 'rejected' ? outcome.reason : outcome.status, tier: stats.tierNumber });
+  const outcome = await submitRun({ nickname, score: stats.score, tier: stats.milestoneNumber, seconds: Math.round(stats.seconds * 10) / 10, eaten: stats.eatenCount });
+  track('leaderboard-submit', { result: outcome.status === 'rejected' ? outcome.reason : outcome.status, tier: stats.milestoneNumber });
   if (stale()) return;
   if (outcome.status === 'offline') return panel.setStatus(OFFLINE);
 
   const top = await fetchTop();
   if (stale()) return;
   if (top) {
-    const own = outcome.status === 'ok' ? { rank: outcome.result.rank, nickname: outcome.result.nickname, score: outcome.result.best, tier: stats.tierNumber } : null;
+    const own = outcome.status === 'ok' ? { rank: outcome.result.rank, nickname: outcome.result.nickname, score: outcome.result.best, tier: stats.milestoneNumber } : null;
     panel.setEntries(top.entries, LEADERBOARD.scoreScreenRows, outcome.status === 'ok' ? nickname : '', own);
   }
   if (outcome.status === 'rejected') return panel.setStatus(REJECTED[outcome.reason]);

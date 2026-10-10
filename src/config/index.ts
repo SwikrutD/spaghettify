@@ -1,11 +1,11 @@
 /** All tunable numbers live here. Game logic must not hard-code these. */
 
-export * from './tiers.ts';
+export * from './arena.ts';
 export * from './quality.ts';
 
 /** The shared simulation (src/sim). The client renders between steps, interpolating positions. */
 export const SIM = {
-  /** Fixed steps per second. Each step is a fixed slice of real time; the tier-up slow motion scales game time inside it. */
+  /** Fixed steps per second. Each step is a fixed slice of real time. */
   tickRate: 60,
 } as const;
 
@@ -15,8 +15,9 @@ export const PLAYER = {
   /** Top speed in world units per second at the starting camera distance. */
   maxSpeed: 9,
   /**
-   * Top speed scales with the camera distance ^ this. 1 keeps the on-screen speed constant as the view
-   * zooms out (the Hole.io feel: always fast); above 1 gets slightly faster on screen as you grow.
+   * Top speed scales with the view distance for the hole's radius (see CAMERA.zoomExponent) ^ this. 1 keeps the
+   * on-screen speed constant as the view zooms out (the Hole.io feel: always fast). The radius alone sets it, not
+   * a client's screen shape, so every hole in an arena gets the same speed for its size.
    */
   speedExponent: 1,
   /** How quickly velocity chases the desired velocity (1/s). Lower = more drifty. */
@@ -29,38 +30,54 @@ export const GROWTH = {
   /**
    * Mass of an object of radius r is massDensity * r ^ massExponent (the player starts with the same rule).
    * 2 makes mass an area, like Hole.io: eating an object adds its area to the hole, so growth stays
-   * proportionate at every scale. Tier thresholds are in these mass units (mass = radius squared).
+   * proportionate at every scale. Mass = radius squared.
    */
   massDensity: 1,
   massExponent: 2,
   /** Fraction of a prey object's mass that the player absorbs. */
   absorbEfficiency: 1,
-  /** radius = startRadius * (mass / startMass) ^ radiusExponent. Keep at 1 / massExponent to conserve area; higher grows faster. */
-  radiusExponent: 0.5,
+  /**
+   * A hole's radius = startRadius * (mass / startMass) ^ radiusExponent. 0.5 would conserve area (a meal the size of
+   * the hole doubles its area at every size, and growth snowballs); 0.4 makes a hole's mass grow faster than its
+   * area, so the same relative meal is worth less the bigger the hole is and growth slows down as it goes. Prey
+   * keep mass = radius squared, so a body's mass reads the same whoever eats it.
+   */
+  radiusExponent: 0.4,
   /** How quickly the visible radius chases the radius implied by mass (1/s). */
   radiusSmoothing: 5,
 } as const;
 
 /**
- * Hunger: Hawking radiation as the fail state. Go too long without eating and the hole slowly evaporates
- * (mass drains); when mass reaches the floor the run ends. Times are in game seconds unless noted.
+ * Hunger: Hawking radiation. Every hole loses mass all the time, faster the bigger it is, so a leader cannot camp
+ * forever; on top of that, going too long without a meal drains it fast. A hole that falls to `evaporateMass`
+ * (below the start mass, so only a tiny starving hole) evaporates and its life ends. Times are game seconds.
  */
 export const HUNGER = {
-  /** Seconds since the last meal before mass starts to drain. */
+  /** Seconds since the last meal before the starvation drain starts. */
   graceTime: 7,
   /** Seconds since the last meal when the warning starts to build (before the drain begins). */
   warnTime: 3.5,
-  /** Fraction of mass lost per second once the drain is at full strength. */
-  decayRate: 0.09,
-  /** Seconds for the drain to ramp from zero to full strength after the grace time. */
+  /** Fraction of mass lost per second to starvation once the drain is at full strength. */
+  starveRate: 0.09,
+  /** Seconds for the starvation drain to ramp from zero to full strength after the grace time. */
   rampTime: 2,
-  /** The run ends when mass falls to max(failMass, runPeakMass * failPeakFraction). */
-  failMass: 0.1,
-  failPeakFraction: 0.5,
+  /**
+   * Hawking decay, always on for holes of at least hawkingMinRadius: hawkingRate of the mass per second at radius
+   * hawkingRadius, scaling with (radius / hawkingRadius) ^ hawkingExponent (0.04 percent a second at the minimum,
+   * 2 percent at radius 100). Smaller holes only lose mass by starving.
+   */
+  hawkingRate: 0.01,
+  hawkingRadius: 50,
+  hawkingExponent: 1,
+  hawkingMinRadius: 2,
+  /** A life ends when the mass falls to this (half the start mass). A hit never takes a hole below its start mass. */
+  evaporateMass: 0.125,
+  /** Seconds of starvation over which the warning climbs from 0.4 to full (sooner close to the evaporation mass). */
+  levelRampTime: 8,
   /** Real seconds of the final evaporation before the score screen, and how fast mass drains in it (1/s). */
   evaporateTime: 1.8,
   evaporateRate: 1.6,
-  /** The evaporating hole shrinks to this fraction of the fail mass and no further. */
+  /** The evaporating hole shrinks to this fraction of the evaporation mass and no further. */
   evaporateFloorFraction: 0.4,
   /** How quickly the displayed hunger level follows the real one (1/s). */
   levelRate: 4,
@@ -68,51 +85,50 @@ export const HUNGER = {
   warnTextLevel: 0.3,
   /** Screen vignette opacity at full hunger. */
   vignetteMax: 0.9,
-  /** Score points per unit of mass eaten (mass is an area, so raw values are small early on). */
+  /** Score points per unit of mass. Score = (peak mass of the life - start mass) x this. */
   pointsPerMass: 1000,
 } as const;
 
 export const PREY = {
-  /** Player can eat an object whose radius is below this fraction of its own radius. */
+  /** A hole can eat a body whose radius is below this fraction of its own radius. */
   edibleRatio: 0.95,
-  /** Eaten when the distance to the player is below playerRadius + preyRadius * eatReach. */
+  /** Eaten when the distance to the hole is below holeRadius + bodyRadius * eatReach. */
   eatReach: 0.25,
   /**
-   * Spawn and despawn distances are in camera distances (the view scale), so the field always covers the
-   * screen whatever the tier. Initial fill (and tier-up refill): spawn distance range.
-   */
-  initialInner: 0.15,
-  initialOuter: 1.45,
-  /** Respawn ring, just beyond the visible area. */
-  respawnInner: 1.2,
-  respawnOuter: 1.55,
-  /** Objects farther than this are recycled. */
-  despawnDistance: 2,
-  /**
-   * Prey smaller than this fraction of the player radius are specks: never spawned (when the tier
-   * table has anything bigger) and recycled once off screen. Keeps the screen full of useful prey.
+   * Grains smaller than this fraction of a hole's radius are specks to it: swallowed on the way with no infall, no
+   * sound and no meal counted (they still add mass), and they do not reset its hunger clock.
    */
   minRelSize: 0.07,
-  /** Max drift speed in camera distances per second. */
-  driftSpeed: 0.006,
   /** Max spin speed in rad/s. */
   spinSpeed: 0.8,
-  /** Seconds to scale in after spawning. */
+  /** Seconds to scale in after spawning or growing back. */
   appearTime: 0.5,
-  /** Rock surface roughness (fraction of radius) and mesh detail. */
+  /** Rock surface roughness (fraction of radius) and mesh detail; rocks small on screen use lower detail. */
   roughness: 0.18,
   meshDetail: 2,
+  meshDetailLow: 1,
+  meshDetailTiny: 0,
+  /** Rocks drawn at least this many pixels in radius use the full detail mesh, under tinyDetailPixels the tiny one. */
+  lowDetailPixels: 10,
+  tinyDetailPixels: 3,
   /**
-   * Round bodies (classes with `round` in the tier tables): smooth-shaded icosphere detail (8 gives about
-   * 800 shared vertices, a smooth silhouette even on a planet filling half the screen) and surface roughness.
+   * Round bodies (classes with `round`): smooth-shaded icosphere detail (8 gives about 800 shared vertices, a
+   * smooth silhouette even on a planet filling half the screen) and surface roughness.
    */
   sphereDetail: 8,
   sphereRoughness: 0.8,
+  /** Bodies and grains smaller than this many pixels in radius are not drawn. */
+  drawMinPixels: 1,
+  /** Most instances drawn per mesh (tiny, low and full detail rocks, spheres); the smallest classes are dropped first. */
+  drawBudgetTiny: 4000,
+  drawBudgetLow: 1500,
+  drawBudgetRock: 600,
+  drawBudgetSphere: 400,
 } as const;
 
 /**
  * Dangers: bodies the hole cannot eat pull it toward them and hurt it on contact. Comets (the roaming
- * hazard) are in COMETS and in each tier's `comets` table. Pull strength is a fraction of the hole's
+ * hazard) are in COMETS. Pull strength is a fraction of the hole's
  * steering authority (PLAYER.responsiveness x current top speed), so it feels the same at every size.
  */
 export const DANGER = {
@@ -137,13 +153,11 @@ export const DANGER = {
   /** Seconds after a hit when input is ignored, and how fast the velocity recovers meanwhile (1/s). */
   stunTime: 0.3,
   stunResponsiveness: 0.8,
-  /** Fraction of mass shed per hit (not score: score is mass eaten). 0.22 of mass is about 12 percent of radius. */
-  shedFraction: 0.22,
   /**
-   * A hit never takes mass below the start mass, and never ends a run by itself: after a hit the hunger floor
-   * is lowered, if needed, to at most this fraction of the remaining mass.
+   * Fraction of mass shed per hit (not score: score is the peak mass). 0.22 of mass is about 12 percent of radius.
+   * A hit never takes a hole below its start mass, so it never ends a life by itself.
    */
-  hitFloorGap: 0.8,
+  shedFraction: 0.22,
   /** After a hit the visible radius drops at this rate (1/s) instead of GROWTH.radiusSmoothing, for squashTime seconds. */
   shrinkRate: 22,
   /** Squash on a hit: the core flattens by up to this fraction and springs back over squashTime seconds. */
@@ -156,22 +170,31 @@ export const DANGER = {
   blinkDim: 0.75,
   /** Camera shake added by a hit (fraction of the camera distance). */
   hitShake: 0.035,
-  /** Spawned bodies the hole cannot eat keep their pull reach plus this many hole radii clear of it, where the spawn ring allows. */
-  spawnClearance: 1,
-  /** Tries to place a spawn clear of other bodies. */
-  spawnTries: 6,
   /** Overlapping bodies are pushed apart at this rate (1/s, fraction of the overlap). */
   separationRate: 12,
 } as const;
 
-/** Comets: the roaming hazard. They cross the view on a straight line; per-tier sizes, speeds and timing are in TIERS. */
+/**
+ * Comets: the roaming hazard. Each hole draws one now and then: it enters just outside that hole's view and crosses
+ * it on a straight line. Sizes are relative to the hole (most are too big to eat), clamped to real nucleus sizes.
+ * Distances and speeds are in view distances of the target hole (radius alone, see CAMERA).
+ */
 export const COMETS = {
-  /** Most comets live at once. */
-  poolSize: 3,
-  /** Comets enter on a ring this far out (camera distances), aimed at a point within aimSpread camera distances of the hole. */
+  /** Most comets live at once in the whole arena. */
+  poolSize: 16,
+  /** Seconds before a new hole's first comet, then between comets for each hole. */
+  firstDelay: 12,
+  interval: [9, 16],
+  /** Nucleus radius as a multiple of the target hole's radius (log-uniform), then clamped to minRadius..maxRadius. */
+  relRadius: [0.6, 3],
+  minRadius: 0.6,
+  maxRadius: 20,
+  /** Speed in view distances per second (the hole's top speed is about 0.8). */
+  speed: [0.45, 0.65],
+  /** Comets enter on a ring this far out, aimed at a point within aimSpread of the hole. */
   spawnDistance: 1.3,
   aimSpread: 0.3,
-  /** Recycled once this far away (camera distances) and moving away. */
+  /** Recycled once this far from every hole and moving away from all of them (or out of the arena). */
   despawnDistance: 1.8,
   /** On a hit the knockback direction blends the contact normal with the comet's direction of travel by this much. */
   knockAlongTravel: 0.6,
@@ -199,8 +222,8 @@ export const COMETS = {
  * mass but is not score.
  */
 export const DEBRIS = {
-  /** Pool size; a full pool reuses the oldest fragment. */
-  poolSize: 40,
+  /** Pool size; a full pool reuses the oldest fragment. Fragments that leave the arena are gone. */
+  poolSize: 120,
   /** Fragments per hit. */
   perHit: 7,
   /** Fraction of the shed mass that becomes debris (the rest is lost as the spark burst). */
@@ -220,8 +243,6 @@ export const DEBRIS = {
   /** Seconds a fragment lives, then it fades out over fadeTime. */
   lifetime: 30,
   fadeTime: 1.5,
-  /** Recycled once this far from the hole (camera distances). */
-  despawnDistance: 2.5,
   /** Heat glow: starts at 1 and cools as exp(-coolRate * t); HDR colours of hot and cooling rock. */
   coolRate: 0.45,
   hotColor: 0xffd6a0,
@@ -257,8 +278,8 @@ export const SHED_BURST = {
  * fall in more slowly. Inedible objects are inert.
  */
 export const SPAGHETTI = {
-  /** Edible prey start to stretch when the gap between their surface and the core is below this (player radii). */
-  onsetGap: 2.5,
+  /** Edible prey start to stretch when the gap between their surface and the core is below this (hole radii). */
+  onsetGap: 1.6,
   /** Stretch factor (length / original) just before being eaten, for the largest edible prey. */
   approachStretch: 1.5,
   /** Peak stretch factor during the infall, for the largest edible prey. */
@@ -316,8 +337,8 @@ export const JUICE = {
   /** Shake strength (fraction of camera distance) at a meal as big as the hole, scaled linearly and capped. */
   shakePerRatio: 0.012,
   shakeMax: 0.03,
-  /** Shake added by a tier-up, and how fast shake dies away (1/s). */
-  tierShake: 0.03,
+  /** Shake added by a size milestone, and how fast shake dies away (1/s). */
+  milestoneShake: 0.03,
   shakeDecay: 7,
   /** Shake oscillation speed (rad/s). */
   shakeFrequency: 55,
@@ -333,10 +354,11 @@ export const CAMERA = {
   /** Distance from the player at the starting radius. */
   startDistance: 11,
   /**
-   * Distance grows as (radius / startRadius) ^ zoomExponent. Below 1 the hole gets bigger on screen as
-   * it grows (0 would never zoom out, 1 keeps it the same size). Hole.io style: grow, zoom out slowly.
+   * View distance grows as (radius / startRadius) ^ zoomExponent, continuously. Below 1 the hole gets bigger on
+   * screen as it grows (0 would never zoom out, 1 keeps it the same size). Hole.io style: grow, zoom out slowly.
+   * Gameplay uses this distance too (top speed, comet paths, what counts as near a hole), from the radius alone.
    */
-  zoomExponent: 0.7,
+  zoomExponent: 0.8,
   /** Vertical field of view in degrees on landscape and square screens. */
   fov: 45,
   /**
@@ -480,6 +502,19 @@ export const RENDER = {
   maxFrameDt: 0.05,
 } as const;
 
+/** The gas wall at the arena edge as drawn (the push itself is in ARENA). */
+export const ARENA_WALL = {
+  /** Lit inner face of the gas (HDR) and the colour of the dense gas beyond it. */
+  glowColor: 0xff6248,
+  glowIntensity: 1.3,
+  gasColor: 0x3a1030,
+  /** How much the dense gas hides what is behind it (0..1). */
+  opacity: 0.92,
+  /** The annulus reaches out to this many arena radii, and its segment count around. */
+  outerRadius: 3,
+  segments: 256,
+} as const;
+
 export const STARFIELD = {
   /** Dense enough that the lens always has stars to bend into arcs. */
   count: 9000,
@@ -556,7 +591,7 @@ export const AUDIO = {
     noteGap: 0.06,
   },
 
-  tierUp: {
+  milestone: {
     level: 0.5,
     sweepFrom: 70,
     sweepTo: 440,
@@ -658,17 +693,19 @@ export const LEADERBOARD = {
   scoreScreenRows: 10,
   titleRows: 5,
   /**
-   * Sanity caps (light anti-cheat, no replay validation). A run of `seconds` cannot eat more than
-   * `maxMealsPerSecond` meals as big as the largest prey in the tier it reached, plus `mealSlack`;
-   * nor more than `eaten` such meals. Reaching a tier needs at least its threshold mass, minus
-   * the starting mass, eaten. Generous on purpose: they catch edited requests, not good play.
+   * Sanity caps (light anti-cheat, no replay validation). Score is the peak mass gained, so a run of `seconds`
+   * cannot have more than the start mass doubled every `doublingSeconds` (a scripted greedy hole doubles about every
+   * 2 seconds at its fastest, at the very start), nor more than `maxPeakMass` (about three times all the matter in
+   * an arena). Reaching a milestone needs at least its mass. Generous on purpose: they
+   * catch edited requests, not good play.
    */
-  maxMealsPerSecond: 2,
-  mealSlack: 5,
-  /** Small meals can come fast at the start (a cluster of dust), but not faster than this overall. */
+  doublingSeconds: 1,
+  maxPeakMass: 1_000_000,
+  /** Meals a run can count: small ones come fast (a sweep through dust), but not faster than this overall. */
   maxEatenPerSecond: 25,
+  mealSlack: 5,
   minSeconds: 3,
   maxSeconds: 3 * 60 * 60,
-  /** Relative tolerance on the tier threshold check (rounding and float drift). */
+  /** Relative tolerance on the milestone mass check (rounding and float drift). */
   thresholdTolerance: 0.01,
 } as const;

@@ -1,10 +1,10 @@
 import * as THREE from 'three';
-import { DANGER, HUNGER, JUICE, LIGHTING, QUALITY, RENDER, TIERS, type Tier } from './config';
+import { DANGER, JUICE, LIGHTING, MILESTONES, QUALITY, RENDER } from './config';
 import { initAnalytics, scoreBand, track } from './analytics/analytics';
 import { AudioEngine } from './audio/AudioEngine';
 import { objectView, poolView } from './debug/debugViews';
 import { ShedBurst } from './effects/ShedBurst';
-import { TierSetPiece } from './effects/TierSetPiece';
+import { MilestoneSetPiece } from './effects/MilestoneSetPiece';
 import { CometFieldMesh } from './entities/CometFieldMesh';
 import { DebrisMesh } from './entities/DebrisMesh';
 import { PreyFieldMesh } from './entities/PreyFieldMesh';
@@ -18,6 +18,7 @@ import { blink, HoleMesh } from './player/HoleMesh';
 import { AutoQuality } from './render/AutoQuality';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
+import { ArenaWall } from './scene/ArenaWall';
 import { createStarfield } from './scene/Starfield';
 import { RunSnapshot } from './share/RunSnapshot';
 import { deliverCard, shareMethod } from './share/share';
@@ -26,6 +27,7 @@ import { isTouchFirst, Settings } from './settings/Settings';
 import { canSwallow } from './sim/body.ts';
 import type { AteEvent } from './sim/events.ts';
 import type { Meal } from './sim/Hole.ts';
+import { classNamed, MILESTONE_MASSES } from './sim/milestones.ts';
 import { World } from './sim/World.ts';
 import { HungerOverlay } from './ui/HungerOverlay';
 import { postRunToBoard, refreshTitleBoard } from './ui/leaderboardFlow';
@@ -33,35 +35,48 @@ import { PauseMenu } from './ui/PauseMenu';
 import { PerfOverlay } from './ui/PerfOverlay';
 import { ScoreScreen, type RunStats } from './ui/ScoreScreen';
 import { SettingsPanel } from './ui/SettingsPanel';
-import { TierBanner } from './ui/TierBanner';
+import { MilestoneBanner } from './ui/MilestoneBanner';
+import { withArticle } from './ui/milestones';
 import { loadBest, saveBest, TitleScreen } from './ui/TitleScreen';
 
 initAnalytics();
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
-// The game state and rules (src/sim). The local player is the world's focus hole, steered by the input vector.
+// The game state and rules (src/sim): one offline arena. The local player is the world's focus hole, steered by
+// the input vector.
 const world = new World({ seed: (Math.random() * 2 ** 32) >>> 0 });
 const local = world.focus;
 
 // What the world looks like. These only read the sim state and react to its events.
 const scene = new THREE.Scene();
 const holeMesh = new HoleMesh();
-const preyMesh = new PreyFieldMesh(world.prey);
+const preyMesh = new PreyFieldMesh(world.prey, world.field);
 const cometMesh = new CometFieldMesh(world.comets);
 const debrisMesh = new DebrisMesh(world.debris);
 const shedBurst = new ShedBurst();
 const starfield = createStarfield();
+const arenaWall = new ArenaWall();
 const keyLight = new THREE.DirectionalLight(LIGHTING.keyColor, LIGHTING.key);
 keyLight.position.set(...LIGHTING.keyPosition);
-scene.add(starfield.points, holeMesh.group, preyMesh.group, cometMesh.group, debrisMesh.object3d, shedBurst.points, new THREE.AmbientLight(0xffffff, LIGHTING.ambient), keyLight);
-const bodyFrame: BodyFrame = { world, alpha: 1, dt: 0, hole: holeMesh };
-const gameCamera = new GameCamera(local.view, holeMesh.position);
-const setPiece = new TierSetPiece();
+scene.add(
+  starfield.points,
+  holeMesh.group,
+  preyMesh.group,
+  cometMesh.group,
+  debrisMesh.object3d,
+  shedBurst.points,
+  arenaWall.mesh,
+  new THREE.AmbientLight(0xffffff, LIGHTING.ambient),
+  keyLight,
+);
+const bodyFrame: BodyFrame = { world, alpha: 1, dt: 0, time: 0, hole: holeMesh, view: { x: 0, z: 0, radius: 1, unitsPerPixel: 1, nearZ: 1, farZ: -1, nearHalf: 1, farHalf: 1 } };
+const gameCamera = new GameCamera(holeMesh.position, local.radius);
+const setPiece = new MilestoneSetPiece();
 
 const audio = new AudioEngine();
 const settings = new Settings();
 const snapshot = new RunSnapshot();
-const banner = new TierBanner();
+const banner = new MilestoneBanner();
 const hungerOverlay = new HungerOverlay();
 const scoreScreen = new ScoreScreen();
 
@@ -77,12 +92,14 @@ function onAte(e: AteEvent): void {
   if (ratio >= JUICE.shakeMinRatio) gameCamera.addShake(Math.min(JUICE.shakeMax, ratio * JUICE.shakePerRatio));
 }
 
-/** The local hole reached a new tier (the sim already swapped the prey table and dips time): flash, banner, sound, shake. */
-function onTier(tier: Tier, index: number): void {
+/** The local hole reached a size milestone: it can now swallow a whole class. Flash, banner, sound, shake. */
+function onMilestone(index: number): void {
+  const milestone = MILESTONES[index];
   setPiece.start();
-  banner.show(index + 1, tier.title);
-  audio.tierUp();
-  gameCamera.addShake(JUICE.tierShake);
+  const unlocks = milestone.unlocks ? classNamed(milestone.unlocks).name : '';
+  banner.show(unlocks ? `NOW BIG ENOUGH TO EAT ${withArticle(unlocks).toUpperCase()}` : '', milestone.title);
+  audio.milestone();
+  gameCamera.addShake(JUICE.milestoneShake);
 }
 
 /** React to what the world did since the last frame. Other holes' events are not drawn yet. */
@@ -102,8 +119,8 @@ function handleEvents(): void {
       case 'shed':
         holeMesh.squash();
         break;
-      case 'tier':
-        onTier(TIERS[e.index], e.index);
+      case 'milestone':
+        onMilestone(e.index);
         break;
       case 'died':
         endRun();
@@ -113,9 +130,9 @@ function handleEvents(): void {
   world.clearEvents();
 }
 
-// Life over: score = mass eaten (scaled to points), shown with the biggest meal and the tier reached.
+// Life over: score = peak mass gained (scaled to points), shown with the biggest meal and the size reached.
 function endRun(): void {
-  const score = Math.round(local.eatenMass * HUNGER.pointsPerMass);
+  const score = local.score;
   const previous = loadBest();
   const newBest = score > previous;
   if (newBest) saveBest(score);
@@ -124,8 +141,8 @@ function endRun(): void {
     best: Math.max(score, previous),
     newBest,
     biggest: local.biggestEaten,
-    tierNumber: local.tier + 1,
-    tierTitle: TIERS[local.tier].title,
+    milestoneNumber: local.milestone + 1,
+    milestoneTitle: MILESTONES[local.milestone].title,
     eatenCount: local.eatenCount,
     seconds: local.hunger.runTime,
   };
@@ -134,7 +151,7 @@ function endRun(): void {
   void postRunToBoard(scoreScreen.board, stats, title.nicknameValue);
   track('run-end', {
     band: scoreBand(score),
-    tier: local.tier + 1,
+    tier: local.milestone + 1,
     seconds: Math.round(local.hunger.runTime),
     eaten: local.eatenCount,
     newBest,
@@ -166,7 +183,7 @@ scoreScreen.onShare = async () => {
     const used = await deliverCard(blob, cardFileName(stats), shareText(stats), method);
     if (!used) return;
     scoreScreen.setStatus(used === 'download' ? 'Card saved' : 'Shared');
-    track('share', { method: used, band: scoreBand(stats.score), tier: stats.tierNumber });
+    track('share', { method: used, band: scoreBand(stats.score), tier: stats.milestoneNumber });
   } finally {
     sharing = false;
   }
@@ -175,23 +192,27 @@ scoreScreen.onShare = async () => {
 /** Steps not yet run: real seconds carried over to the next frame. */
 let pending = 0;
 
-/** Draw the world as of `alpha` (0..1) between its last two steps. `dt` is game seconds since the last frame. */
+/** Draw the world as of `alpha` (0..1) between its last two steps. `dt` is seconds since the last frame. */
 function renderWorld(dt: number, alpha: number): void {
   holeMesh.update(dt, local, alpha);
   bodyFrame.alpha = alpha;
   bodyFrame.dt = dt;
+  bodyFrame.time += dt;
+  // What the camera sees (as of the last frame's placement; it moves little in one frame), with a margin for
+  // bodies whose centre is just off screen.
+  gameCamera.groundView(bodyFrame.view, gameCamera.distance * 0.1);
   preyMesh.update(bodyFrame);
   cometMesh.update(bodyFrame);
   debrisMesh.update(bodyFrame);
   shedBurst.update(dt);
 }
 
-// Fresh run: the world (hole, tier, prey pool, comets, debris, hunger), then the camera and everything drawn from it.
+// Fresh run: a fresh arena (hole, field, bodies, comets, debris, hunger), then the camera and everything drawn from it.
 function resetRun(): void {
   world.reset();
   pending = 0;
   holeMesh.reset(local);
-  gameCamera.reset(holeMesh.position);
+  gameCamera.reset(holeMesh.position, local.radius);
   shedBurst.reset();
   setPiece.reset();
   hungerOverlay.reset();
@@ -349,6 +370,7 @@ const debug = {
       handleEvents();
     },
   }),
+  /** The arena's bodies (dwarf planets and up) and helpers around them and the small-matter field. */
   prey: {
     get objects() {
       return poolView(world.prey.objects);
@@ -358,9 +380,36 @@ const debug = {
     },
     /** True if the local hole is big enough to eat this object. */
     isEdible: (obj: { radius: number }) => canSwallow(obj.radius, local.radius),
-    meshOf: (i: number) => preyMesh.meshOf(i),
+    /** The mesh and instance arena body i was drawn as in the last frame, or null. */
+    instanceOf: (i: number) => preyMesh.instanceOf(i),
+    /** Instances drawn last frame per mesh: low detail rocks, rocks, spheres. */
+    get counts() {
+      return preyMesh.counts;
+    },
     group: preyMesh.group,
+    /**
+     * Something to eat: an arena body slot turned into a still rock of `radius` (a fraction of the hole's by
+     * default), `gap` hole radii to the right of the hole. It goes back to its class when it respawns.
+     */
+    edible(radius = local.radius * 0.6, gap = 4) {
+      const body = world.prey.objects[world.prey.objects.length - 1];
+      body.state = 'alive';
+      body.className = 'rock';
+      body.round = false;
+      body.radius = radius;
+      body.mass = radius * radius;
+      body.velocity.x = body.velocity.z = 0;
+      body.position.x = local.position.x + local.radius * gap;
+      body.position.z = local.position.z;
+      return objectView(body);
+    },
+    /** Nothing near the hole: every body respawns out of its sight and the small matter around it is cleared. */
+    clear() {
+      for (const body of world.prey.objects) body.position.x += 1e6;
+      world.field.clearAround(local.position.x, local.position.z, gameCamera.targetDistance * 4);
+    },
   },
+  field: world.field,
   comets: {
     get objects() {
       return poolView(world.comets.objects);
@@ -369,8 +418,8 @@ const debug = {
       return world.comets.launched;
     },
     launch: (x: number, z: number, vx: number, vz: number, radius: number) => world.comets.launch(x, z, vx, vz, radius),
-    spawn: () => world.comets.spawn(),
-    reset: (tier: Tier) => world.comets.reset(tier),
+    spawn: () => world.comets.spawn(local),
+    reset: () => world.comets.reset(),
   },
   debris: {
     get objects() {
@@ -407,16 +456,12 @@ const debug = {
       return local.shedMass;
     },
   },
-  tiers: {
+  milestones: {
     get index() {
-      return local.tier;
+      return local.milestone;
     },
-    get tier() {
-      return TIERS[local.tier];
-    },
-    get timeScale() {
-      return world.timeScale;
-    },
+    all: MILESTONES,
+    masses: MILESTONE_MASSES,
   },
   get hunger() {
     return local.hunger;
@@ -430,7 +475,6 @@ const debug = {
   get mode() {
     return mode;
   },
-  allTiers: TIERS,
   camera: gameCamera,
   renderer,
   snapshot,
@@ -486,19 +530,18 @@ function frame(now: number): void {
   }
   handleEvents();
   const alpha = pending / world.dt;
-  // Game time (slowed during the tier-up) for everything animated; the camera and overlays run on real time.
-  const dt = realDt * world.timeScale;
   snapshot.update(realDt);
   // A run with no photo yet gets one as the hole starts to evaporate.
   if (local.phase === 'evaporating') snapshot.ensure();
   hungerOverlay.update(realDt, local.hunger.level);
   // The disk dims as the hole starves and blinks while it is invulnerable after a hit.
   holeMesh.disk.starvation = Math.max(hungerOverlay.level, blink(local));
-  renderWorld(dt, alpha);
+  renderWorld(realDt, alpha);
   audio.update(realDt, local.radius, hungerOverlay.level, local.phase);
   gameCamera.punch = setPiece.punch;
-  gameCamera.update(realDt, holeMesh.position);
-  starfield.update(holeMesh.position, local.view.viewScale);
+  gameCamera.update(realDt, holeMesh.position, holeMesh.radius);
+  arenaWall.update(realDt, holeMesh.radius);
+  starfield.update(holeMesh.position, gameCamera.viewScale);
   banner.update(setPiece.flash);
   drawFrame(start);
 }

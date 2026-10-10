@@ -1,27 +1,34 @@
-import { TIERS } from '../../config/index.ts';
 import type { Body } from '../body.ts';
 import type { SimEvent } from '../events.ts';
 import { massOfRadius, type Hole } from '../Hole.ts';
 import { World } from '../World.ts';
 
 /**
- * A world with the prey field sent away: one step respawns every body on the ring off screen, and bodies the
- * hole cannot eat land out of their pull reach. The hole sits at the origin with nothing near it.
+ * A world with nothing near the hole: the small-matter field is off, and every body is sent out of the arena so
+ * one step respawns it out of sight of the hole. The hole sits at the origin.
  */
 export function calmWorld(seed: number): World {
   const world = new World({ seed });
+  world.field.enabled = false;
   for (const obj of world.prey.objects) obj.position.x += 1e6;
   world.step();
   world.clearEvents();
   return world;
 }
 
-/** No comet for the next while (restarts the tier's first-comet delay). */
-export function holdComets(world: World): void {
-  world.comets.reset(TIERS[world.focus.tier]);
+/** Send every body away: one step respawns each out of sight of the holes as they are now (after growing one, say). */
+export function clearBodies(world: World): void {
+  for (const obj of world.prey.objects) obj.position.x += 1e6;
+  world.step();
+  world.clearEvents();
 }
 
-/** Step for `seconds` of real time, calling `each` before every step. Returns the events of those steps, oldest first. */
+/** No comet for the next while (every hole waits the first-comet delay again). */
+export function holdComets(world: World): void {
+  world.comets.reset();
+}
+
+/** Step for `seconds`, calling `each` before every step. Returns the events of those steps, oldest first. */
 export function run(world: World, seconds: number, each?: () => void): SimEvent[] {
   const events: SimEvent[] = [];
   const steps = Math.round(seconds / world.dt);
@@ -39,7 +46,7 @@ export function step(world: World): SimEvent[] {
   return run(world, world.dt);
 }
 
-/** Make prey slot `i` a still, live body of `radius` at (x, z). */
+/** Make arena body slot `i` a still, live body of `radius` at (x, z). */
 export function placeBody(world: World, i: number, radius: number, x: number, z: number): Body {
   const body = world.prey.objects[i];
   body.state = 'alive';
@@ -62,12 +69,19 @@ export function distance(a: { position: { x: number; z: number } }, b: { positio
   return Math.hypot(a.position.x - b.position.x, a.position.z - b.position.z);
 }
 
+/** A cheap fingerprint of a big typed array (equal arrays, equal values; different ones almost surely differ). */
+function checksum(a: ArrayLike<number>): number {
+  let h = 0;
+  for (let i = 0; i < a.length; i++) if (a[i] !== 0) h = (Math.imul(h ^ i, 0x9e3779b1) + Math.round(a[i] * 1000)) | 0;
+  return h;
+}
+
 /** Everything that makes up the world's state, as one string (equal strings mean equal worlds). */
 export function digest(world: World): string {
   return JSON.stringify({
     tick: world.tick,
+    time: world.time,
     rng: world.rng.state,
-    timeScale: world.timeScale,
     holes: world.holes.map((h) => ({
       id: h.id,
       position: h.position,
@@ -75,6 +89,7 @@ export function digest(world: World): string {
       pull: h.pull,
       radius: h.radius,
       mass: h.mass,
+      peak: h.peakMass,
       eatenMass: h.eatenMass,
       eatenCount: h.eatenCount,
       biggest: h.biggestEaten,
@@ -82,11 +97,13 @@ export function digest(world: World): string {
       invulnerable: h.invulnerable,
       hits: h.hits,
       shedMass: h.shedMass,
-      tier: h.tier,
+      milestone: h.milestone,
       shrink: h.shrink,
-      view: [h.view.radiusDistance, h.view.tierScale, h.view.tierScaleTarget],
-      hunger: [h.hunger.phase, h.hunger.idle, h.hunger.runTime, h.hunger.level, h.hunger.peakMass],
+      comet: h.cometTimer,
+      hunger: [h.hunger.phase, h.hunger.idle, h.hunger.runTime, h.hunger.level],
     })),
+    field: world.field.layers.map((l) => [checksum(l.taken), checksum(l.epoch), checksum(l.regrowAt), l.waiting]),
+    infall: world.field.infall,
     prey: world.prey.objects,
     comets: world.comets.objects,
     debris: world.debris.objects,

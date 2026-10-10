@@ -24,7 +24,7 @@ What the api does:
 
 - `POST /api/scores`, `GET /api/scores/top`, `GET /api/scores/rank?score=n`, `GET /api/health`, all `no-store`.
 - Light anti-cheat: 6 score submissions and 120 requests per minute per client IP, score sanity caps from
-  the run time and the tier tables, a nickname filter (shared rules in `src/leaderboard/rules.ts`).
+  the run time and the size milestones, a nickname filter (shared rules in `src/leaderboard/rules.ts`).
 - The client IP is taken from `X-Forwarded-For` only through proxies on private addresses (Caddy,
   cloudflared), so a player cannot dodge the rate limit with a made-up header.
 - Logs only rejected runs and errors (`docker logs spaghettify-api`).
@@ -178,12 +178,13 @@ with `sudo docker image prune`.
 
 ## Analytics events
 
-Page views are automatic. Custom events (sent only on the live hostname, see `src/analytics/analytics.ts`):
+Page views are automatic. The `tier` field (and the leaderboard's `tier` column) holds the size milestone reached
+since M16; the name stayed for compatibility. Custom events (sent only on the live hostname, see `src/analytics/analytics.ts`):
 
 | Event | When | Fields |
 | --- | --- | --- |
 | `run-start` | Play from the title screen or Play again | `from` (`title` or `restart`) |
-| `run-end` | The hole evaporates | `band` (score range), `tier`, `seconds`, `eaten`, `newBest` |
+| `run-end` | The hole evaporates | `band` (score range), `tier` (the size milestone reached, 1 to 9), `seconds`, `eaten`, `newBest` |
 | `leaderboard-submit` | The score screen posted a run (only with a nickname set) | `result` (`ok`, `offline`, `nickname`, `implausible`, `invalid` or `rate`), `tier` |
 | `share` | The share card was shared (share sheet) or saved (download) from the score screen | `method` (`share` or `download`), `band`, `tier` |
 

@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { DANGER, DEBRIS, PREY } from '../../config/index.ts';
 import type { BumpedEvent, ShedEvent } from '../events.ts';
+import { viewDistance } from '../Hole.ts';
 import { calmWorld, distance, holdComets, placeBody, run, setMass, step } from './helpers.ts';
 
 test('touching a big body knocks the hole back, sheds a fifth of its mass (not score) as hot debris, then it is invulnerable', () => {
@@ -29,8 +30,8 @@ test('touching a big body knocks the hole back, sheds a fifth of its mass (not s
   assert.ok(hole.velocity.x < 0);
   assert.ok(hole.stun > 0);
   assert.ok(hole.invulnerable > DANGER.invulnerableTime - 0.05);
-  // A hit alone never starves the hole: the hunger floor drops below what is left.
-  assert.ok(hole.hunger.floorMass <= hole.mass * DANGER.hitFloorGap + 1e-12);
+  // A hit alone never ends a life: what is left is well above the evaporation mass.
+  assert.ok(hole.mass > hole.hunger.floorMass);
 
   // The shed mass flies off as hot, edible fragments, away from the body.
   const frags = world.debris.objects.filter((f) => f.active);
@@ -121,7 +122,7 @@ test('a big body pulls a hole with no input toward it; holding away escapes', ()
 test('comets: one aimed at a hole that cannot eat it knocks the hole along its travel; a small one is eaten', () => {
   const world = calmWorld(15);
   const hole = world.focus;
-  const view = hole.view.targetDistance;
+  const view = viewDistance(hole.radius);
   holdComets(world);
   const comet = world.comets.launch(hole.position.x - view * 0.5, hole.position.z, view, 0, hole.radius * 2);
   assert.ok(comet);

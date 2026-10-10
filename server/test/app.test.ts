@@ -1,6 +1,7 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildApp, type AppOptions } from '../src/app.ts';
+import { MILESTONES } from '../../src/config/index.ts';
 import { checkRun, cleanNickname, isProfane, maxScore, minScore, type RunSubmission } from '../../src/leaderboard/rules.ts';
 
 const run = (over: Partial<RunSubmission> = {}): RunSubmission => ({ nickname: 'Pea', score: 1200, tier: 1, seconds: 40, eaten: 30, ...over });
@@ -23,14 +24,16 @@ describe('rules', () => {
     }
   });
 
-  test('caps follow the tier tables and the run time', () => {
+  test('caps follow the milestone ladder and the run time', () => {
     assert.equal(minScore(1), 0);
-    // Tier 2 starts at mass 9 from a start mass of 0.25: at least 8.75 mass eaten.
-    assert.ok(minScore(2) > 8000 && minScore(2) <= 8750);
-    assert.ok(maxScore(1, 60, 1000) > maxScore(1, 10, 1000));
-    assert.ok(maxScore(3, 60, 1000) > maxScore(1, 60, 1000));
-    // Few meals cap the score even in a long run.
-    assert.ok(maxScore(1, 600, 2) < maxScore(1, 600, 200));
+    // Each milestone needs more peak mass than the one before.
+    for (let m = 2; m <= MILESTONES.length; m++) assert.ok(minScore(m) > minScore(m - 1));
+    // Rock eater: a hole that can swallow the largest rock (radius 0.85 / 0.95), from the start mass 0.25.
+    assert.ok(minScore(2) > 700 && minScore(2) < 1000);
+    assert.ok(maxScore(10) > maxScore(5));
+    // A few seconds cannot hold an asteroid eater's mass; long lives hit the arena-wide cap.
+    assert.ok(maxScore(3) < minScore(4));
+    assert.equal(maxScore(3600), maxScore(600));
   });
 
   test('checkRun accepts a plausible run and rejects edited ones', () => {
@@ -42,16 +45,18 @@ describe('rules', () => {
     };
     assert.equal(reason({ ...run(), score: -1 }), 'invalid');
     assert.equal(reason({ ...run(), score: 1.5 }), 'invalid');
-    assert.equal(reason({ ...run(), tier: 4 }), 'invalid');
+    assert.equal(reason({ ...run(), tier: MILESTONES.length + 1 }), 'invalid');
+    assert.equal(reason({ ...run(), tier: 0 }), 'invalid');
     assert.equal(reason({ ...run(), tier: '1' }), 'invalid');
     assert.equal(reason({ ...run(), seconds: Number.NaN }), 'invalid');
     assert.equal(reason({ ...run(), nickname: 'x'.repeat(65) }), 'invalid');
     assert.equal(reason(run({ nickname: '!!!' })), 'nickname');
     assert.equal(reason(run({ nickname: 'shithead' })), 'nickname');
     assert.equal(reason(run({ seconds: 1 })), 'implausible');
-    assert.equal(reason(run({ score: maxScore(1, 40, 30) + 1 })), 'implausible');
+    assert.equal(reason(run({ score: maxScore(40) + 1 })), 'implausible');
+    assert.equal(reason(run({ seconds: 4, score: 10_000 })), 'implausible');
     assert.equal(reason(run({ eaten: 5000 })), 'implausible');
-    // Claims tier 3 without the mass it takes to get there.
+    // Claims milestone 3 without the mass it takes to get there.
     assert.equal(reason(run({ tier: 3, score: 5000 })), 'implausible');
     assert.equal(reason(run({ tier: 3, score: minScore(3) + 1000, seconds: 200, eaten: 400 })), 'ok');
   });

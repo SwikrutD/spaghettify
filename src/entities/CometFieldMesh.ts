@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { COMETS, SPAGHETTI } from '../config';
 import type { CometField } from '../sim/CometField.ts';
+import { viewDistance } from '../sim/Hole.ts';
 import { lerp } from '../sim/math.ts';
 import { hash01 } from '../sim/rng.ts';
 import { OVERLAY_LAYER } from '../render/layers';
@@ -66,19 +67,16 @@ export class CometFieldMesh {
     // plane as far background and bend it hard, leaving hard-edged bright ghosts around the nucleus.
     this.tails.layers.set(OVERLAY_LAYER);
     this.tails.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-    this.nuclei.mesh.count = COMETS.poolSize;
     this.group.add(this.tails, this.nuclei.mesh);
   }
 
   update(frame: BodyFrame): void {
     this.timeUniform.value += frame.dt;
-    this.nuclei.setHole(frame);
-    const view = frame.world.focus.view.targetDistance;
+    this.nuclei.begin(frame);
     const objects = this.field.objects;
     for (let i = 0; i < objects.length; i++) {
       const comet = objects[i];
       if (!comet.active) {
-        this.nuclei.hide(i);
         this.tails.setMatrixAt(i, ZERO_MATRIX);
         continue;
       }
@@ -87,7 +85,7 @@ export class CometFieldMesh {
         this.seedAttr.setX(i, hash01(comet.seed, 8));
         this.seedAttr.needsUpdate = true;
       }
-      this.nuclei.write(i, comet, frame);
+      this.nuclei.add(comet, frame);
 
       // Local +x points back along the path: rotate about Y so (1, 0, 0) maps to -velocity.
       tmpQuat.setFromAxisAngle(UP, Math.atan2(comet.velocity.z, -comet.velocity.x));
@@ -102,10 +100,11 @@ export class CometFieldMesh {
       }
       tmpMat.compose(tmpPos, tmpQuat, ONE);
       this.tails.setMatrixAt(i, tmpMat);
-      const length = comet.radius * COMETS.tailLengthRadii + COMETS.tailLengthView * view;
+      // The tail reaches a fraction of the view of the hole it was sized for (its nucleus is about that hole's size).
+      const length = comet.radius * COMETS.tailLengthRadii + COMETS.tailLengthView * viewDistance(comet.radius);
       this.shapeAttr.setXYZW(i, length, comet.radius * COMETS.tailWidth * 0.5, comet.radius * COMETS.comaRadius, comet.fade);
     }
-    this.nuclei.commit();
+    this.nuclei.end();
     this.tails.instanceMatrix.needsUpdate = true;
     this.shapeAttr.needsUpdate = true;
   }

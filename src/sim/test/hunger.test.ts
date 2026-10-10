@@ -1,13 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { HUNGER } from '../../config/index.ts';
-import { calmWorld, holdComets, placeBody, run, step } from './helpers.ts';
+import { hawkingRate } from '../Hunger.ts';
+import { holeMassForRadius } from '../Hole.ts';
+import { calmWorld, clearBodies, holdComets, placeBody, run, setMass, step } from './helpers.ts';
 
 test('mass holds through the grace time while the warning builds, then drains; a meal resets the clock', () => {
   const world = calmWorld(31);
   const hole = world.focus;
   const start = hole.mass;
   run(world, HUNGER.graceTime - 0.2, () => holdComets(world));
+  // A pea feels no Hawking decay: it only loses mass by starving.
   assert.equal(hole.mass, start);
   assert.ok(hole.hunger.level > 0.2 && hole.hunger.level <= 0.4);
   assert.equal(hole.phase, 'playing');
@@ -23,12 +26,33 @@ test('mass holds through the grace time while the warning builds, then drains; a
   assert.ok(hole.hunger.idle < world.dt * 1.5);
 });
 
-test('at the floor the hole evaporates on real time, its life ends with one died event, and it no longer eats or steers', () => {
+test('Hawking decay scales with size: a big hole loses a bigger share of its mass every second, fed or not', () => {
+  assert.ok(hawkingRate(100) > hawkingRate(20) * 4);
+  assert.equal(hawkingRate(0.5), 0);
+
+  const world = calmWorld(35);
+  const small = world.focus;
+  const big = world.addHole(0, -400);
+  setMass(small, holeMassForRadius(5));
+  setMass(big, holeMassForRadius(80));
+  clearBodies(world);
+  const before = { small: small.mass, big: big.mass };
+  // Inside the grace time (no starvation yet): only the size-scaled decay acts.
+  run(world, 3, () => holdComets(world));
+  const lostSmall = 1 - small.mass / before.small;
+  const lostBig = 1 - big.mass / before.big;
+  assert.ok(lostBig > lostSmall * 10, `${lostBig} vs ${lostSmall}`);
+  assert.ok(Math.abs(lostBig - (1 - Math.exp(-hawkingRate(80) * 3))) < 0.01);
+  assert.equal(big.phase, 'playing');
+});
+
+test('a tiny starving hole evaporates on time, its life ends with one died event, and it no longer eats or steers', () => {
   const world = calmWorld(32);
   const hole = world.focus;
   hole.hunger.idle = 100;
-  hole.mass = hole.hunger.floorMass * 1.01;
-  const toEvaporate = run(world, 0.5, () => holdComets(world));
+  // From the start mass, starving at full strength: about ln(2) / starveRate seconds to the evaporation mass.
+  const expected = Math.log(hole.mass / hole.hunger.floorMass) / HUNGER.starveRate;
+  const toEvaporate = run(world, expected + 0.3, () => holdComets(world));
   assert.equal(hole.phase, 'evaporating');
   assert.equal(toEvaporate.filter((e) => e.type === 'died').length, 0);
 
@@ -49,23 +73,35 @@ test('at the floor the hole evaporates on real time, its life ends with one died
   assert.equal(hole.hunger.runTime, runTime);
 });
 
-test('a hit lowers the floor so it never ends a life by itself, and hunger off means no drain', () => {
+test('a big starving hole shrinks fast but lives on for a long while; its score keeps the peak', () => {
+  const world = calmWorld(36);
+  const hole = world.focus;
+  setMass(hole, holeMassForRadius(40));
+  hole.peakMass = hole.mass;
+  clearBodies(world);
+  const score = hole.score;
+  hole.hunger.idle = 100;
+  run(world, 12, () => holdComets(world));
+  assert.ok(hole.mass < hole.peakMass * 0.4);
+  assert.equal(hole.phase, 'playing');
+  assert.equal(hole.score, score);
+});
+
+test('a hit never ends a life (it never takes a hole below its start mass), and hunger off means no decay at all', () => {
   const world = calmWorld(33);
   const hole = world.focus;
-  hole.mass = hole.startMass * 4;
   hole.hunger.idle = 100;
-  step(world);
-  // Just above the floor, then a hit: the floor drops below what is left and the hole lives on.
-  hole.mass = hole.hunger.floorMass * 1.02;
-  hole.radius = hole.radiusForMass();
+  setMass(hole, hole.startMass * 1.05);
   placeBody(world, 0, hole.radius * 4, hole.position.x + hole.radius * 4, hole.position.z);
   step(world);
   assert.equal(hole.hits, 1);
-  assert.ok(hole.hunger.floorMass < hole.mass * 0.85);
+  assert.ok(hole.mass >= hole.startMass * 0.99);
+  assert.ok(hole.mass > hole.hunger.floorMass);
   assert.equal(hole.phase, 'playing');
 
   const calm = calmWorld(34);
   const off = calm.focus;
+  setMass(off, holeMassForRadius(60));
   off.hunger.enabled = false;
   off.hunger.idle = 100;
   const mass = off.mass;

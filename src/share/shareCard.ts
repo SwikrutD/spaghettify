@@ -21,7 +21,7 @@ export function cardFileName(stats: RunStats): string {
 
 /**
  * Draws the share card: the run screenshot with the hole on the right, and on the left the score, the
- * biggest object eaten, the tier reached and the game URL. Returns a fresh canvas of SHARE.width x height.
+ * biggest object eaten, the size milestone reached and the game URL. Returns a fresh canvas of SHARE.width x height.
  */
 export function renderShareCard(stats: RunStats, snapshot: HTMLCanvasElement | null): HTMLCanvasElement {
   const W = SHARE.width;
@@ -73,8 +73,8 @@ export function renderShareCard(stats: RunStats, snapshot: HTMLCanvasElement | n
   text(ctx, ladder, x, 420, fitFont(ctx, ladder, 600, 46, maxText), '#ffe6cc', 0, maxText);
   ctx.shadowBlur = 0;
 
-  const tier = `TIER ${stats.tierNumber}: ${stats.tierTitle.toUpperCase()}`;
-  text(ctx, tier, x, 470, `600 22px ${FONT}`, 'rgba(255, 255, 255, 0.8)', 0.2, maxText);
+  const size = stats.milestoneTitle.toUpperCase();
+  text(ctx, size, x, 470, `600 22px ${FONT}`, 'rgba(255, 255, 255, 0.8)', 0.2, maxText);
   const mins = Math.floor(stats.seconds / 60);
   const secs = String(Math.floor(stats.seconds % 60)).padStart(2, '0');
   const eaten = `${stats.eatenCount} ${stats.eatenCount === 1 ? 'object' : 'objects'} spaghettified in ${mins}:${secs}`;

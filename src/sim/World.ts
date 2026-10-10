@@ -1,57 +1,62 @@
-import { PREY, SIM, SPAGHETTI, TIER_UP, TIERS, tierIndexForMass } from '../config/index.ts';
+import { ARENA, DANGER, PREY, SIM, SPAGHETTI } from '../config/index.ts';
 import { canSwallow, sizeWeight, type Body } from './body.ts';
 import { CometField } from './CometField.ts';
 import { Dangers } from './Dangers.ts';
 import { DebrisField } from './DebrisField.ts';
 import type { SimEvent } from './events.ts';
-import { Hole, type Meal } from './Hole.ts';
-import { lerp, smoothstep } from './math.ts';
+import { Hole, viewDistance, type Meal } from './Hole.ts';
+import { lerp } from './math.ts';
+import { MatterField } from './MatterField.ts';
+import { milestoneIndexForMass } from './milestones.ts';
 import { PreyField } from './PreyField.ts';
 import { Rng } from './rng.ts';
 
 export interface WorldOptions {
-  /** Seed of the world's random stream. The same seed and the same inputs give the same world. */
+  /** Seed of the world's random stream and of the procedural field. The same seed and inputs give the same world. */
   seed?: number;
   /** Fixed steps per second (SIM.tickRate by default). */
   tickRate?: number;
 }
 
 /**
- * The whole game state and its rules, stepped at a fixed rate: holes (the local player is one, driven by its
- * input vector), prey, comets and debris. Pure and deterministic: no three.js, DOM or browser APIs, and every
- * random choice comes from `rng`, so the server can run it too. Renderers, audio and UI only read its state
- * and drain `events`.
- *
- * Until the mixed arena (M16) the prey field, comets and despawning follow one hole, the `focus` (the local
- * player): bodies spawn around it at distances in its view, its tier picks the prey table, and its tier-up
- * slows the world for a moment.
+ * The whole game state and its rules, stepped at a fixed rate: one bounded arena (ARENA) where every size of
+ * matter coexists (the procedural `field` of small matter, the individual `prey` bodies, comets and debris) and
+ * the holes in it, each driven by its input vector. Pure and deterministic: no three.js, DOM or browser APIs, and
+ * every random choice comes from `rng`, so the server can run it too. Renderers, audio and UI only read its state
+ * and drain `events`. No rule follows one particular hole: `focus` is only the local player's hole for the client.
  */
 export class World {
-  /** Real seconds per step. */
+  /** Seconds per step. */
   readonly dt: number;
+  readonly seed: number;
   readonly rng: Rng;
   readonly holes: Hole[] = [];
+  /** The local player's hole (the first one). Nothing in the rules depends on it. */
   readonly focus: Hole;
+  readonly field: MatterField;
   readonly prey: PreyField;
   readonly comets: CometField;
   readonly debris: DebrisField;
   readonly dangers: Dangers;
   /** What happened since the last clearEvents(), oldest first. */
   readonly events: SimEvent[] = [];
-  /** Steps since the world was made or reset. */
+  /** Steps and seconds since the world was made or reset. */
   tick = 0;
+  time = 0;
   private nextId = 0;
-  /** Real seconds since the focus hole's last tier-up (infinite before the first). */
-  private sinceTierUp = Infinity;
 
   constructor(options: WorldOptions = {}) {
     this.dt = 1 / (options.tickRate ?? SIM.tickRate);
-    this.rng = new Rng(options.seed ?? 1);
-    this.focus = this.addHole();
-    this.prey = new PreyField(this, TIERS[0]);
-    this.comets = new CometField(this, TIERS[0]);
+    this.seed = (options.seed ?? 1) >>> 0;
+    this.rng = new Rng(this.seed);
+    this.focus = new Hole(this.nextId++);
+    this.holes.push(this.focus);
+    this.field = new MatterField(this);
+    this.prey = new PreyField(this);
+    this.comets = new CometField(this);
     this.debris = new DebrisField(this);
     this.dangers = new Dangers(this);
+    this.reset();
   }
 
   /** A new hole at (x, z), fresh as at the start of a life. */
@@ -66,56 +71,35 @@ export class World {
     return this.holes.find((h) => h.id === id);
   }
 
-  /**
-   * Game speed multiplier: dips into slow motion right after the focus hole reaches a new tier (the set piece).
-   * Each step is a fixed slice of real time; game rules run on that times this.
-   */
-  get timeScale(): number {
-    const t = this.sinceTierUp;
-    if (t >= TIER_UP.slowmoTime) return 1;
-    const dip = smoothstep(0, 0.08, t) * (1 - smoothstep(TIER_UP.slowmoTime * 0.4, TIER_UP.slowmoTime, t));
-    return 1 - (1 - TIER_UP.slowmoScale) * dip;
-  }
-
   /** Advance one fixed step. */
   step(): void {
-    const realDt = this.dt;
+    const dt = this.dt;
+    this.time += dt;
     for (const hole of this.holes) hole.capture();
+    this.field.capture();
     this.prey.capture();
     this.comets.capture();
     this.debris.capture();
+    // Bodies may have been moved since the last step (by tests or the debug console): sort them in afresh.
+    this.prey.rebuild();
 
-    this.sinceTierUp += realDt;
-    for (const hole of this.holes) this.checkTier(hole);
-    const dt = realDt * this.timeScale;
-    // Big bodies pull the holes and push them out on contact (a hit sheds mass), before they move.
+    for (const hole of this.holes) this.checkMilestone(hole);
+    // Big things pull the holes and push them out on contact (a hit sheds mass), and the edge pushes back, before they move.
     this.dangers.update(dt);
     for (const hole of this.holes) hole.move(dt);
+    this.dangers.confine();
     for (const hole of this.holes) {
       const before = hole.phase;
-      hole.hunger.update(dt, realDt);
+      hole.hunger.update(dt);
       if (before !== 'over' && hole.phase === 'over') this.events.push({ type: 'died', hole: hole.id });
     }
+    for (const hole of this.holes) this.feed(hole);
+    for (const hole of this.holes) if (hole.mass > hole.peakMass) hole.peakMass = hole.mass;
     this.prey.update(dt);
+    this.field.update(dt);
     this.comets.update(dt);
     this.debris.update(dt);
-    for (const hole of this.holes) hole.view.update(realDt, hole.radius);
     this.tick++;
-  }
-
-  /** The first hole that can swallow `obj` and touches it eats it. `ownerId`: whose shed debris it is (eating it back is not score). */
-  feedOn(obj: Body, ownerId = -1): boolean {
-    for (const hole of this.holes) {
-      if (!hole.canEat || !canSwallow(obj.radius, hole.radius)) continue;
-      const dx = obj.position.x - hole.position.x;
-      const dz = obj.position.z - hole.position.z;
-      const reach = hole.radius + obj.radius * PREY.eatReach;
-      if (dx * dx + dz * dz < reach * reach) {
-        this.swallow(obj, hole, hole.id === ownerId);
-        return true;
-      }
-    }
-    return false;
   }
 
   /** Eaten on contact: credit the mass now and start the infall, which follows the hole until the body drains into it. */
@@ -150,31 +134,66 @@ export class World {
     this.events.length = 0;
   }
 
-  /** A fresh run: the focus hole starts a new life at the origin, other holes leave, the field refills. The random stream carries on. */
+  /**
+   * A fresh arena: the focus hole starts a new life at the centre, other holes leave, the field grows back in full,
+   * bodies are scattered anew and the start is cleared of anything the hole cannot eat. The random stream carries on.
+   */
   reset(): void {
     this.holes.length = 0;
     this.holes.push(this.focus);
     this.events.length = 0;
     this.tick = 0;
-    this.sinceTierUp = Infinity;
+    this.time = 0;
     this.focus.reset();
-    this.prey.reset(TIERS[0]);
-    this.comets.reset(TIERS[0]);
+    this.field.reset();
+    this.prey.reset();
+    this.comets.reset();
     this.debris.reset();
+    this.clearStart(this.focus);
   }
 
-  /** Tiers only go up. The focus hole's new tier swaps the prey table and comet timing and slows the world for a moment. */
-  private checkTier(hole: Hole): void {
-    const next = tierIndexForMass(hole.mass);
-    if (next <= hole.tier) return;
-    hole.tier = next;
-    const tier = TIERS[next];
-    hole.view.setTierScale(tier.cameraScale);
-    if (hole === this.focus) {
-      this.sinceTierUp = 0;
-      this.prey.setTier(tier);
-      this.comets.setTier(tier);
+  /** Keep the start of a life fair: nothing the hole cannot eat close around it or within pulling reach (food stays). */
+  clearStart(hole: Hole): void {
+    const clear = ARENA.spawnClearViews * viewDistance(hole.radius);
+    this.field.clearAround(hole.position.x, hole.position.z, clear, hole.radius * PREY.edibleRatio, DANGER.pullReach);
+  }
+
+  /** The hole eats every edible thing it touches: bodies, grains, comets and debris (its own debris gives no score). */
+  private feed(hole: Hole): void {
+    if (!hole.canEat) return;
+    const r = hole.radius;
+    const x = hole.position.x;
+    const z = hole.position.z;
+    const prey = this.prey;
+    const n = prey.query(x, z, r, PREY.eatReach);
+    for (let k = 0; k < n; k++) {
+      const body = prey.objects[prey.found[k]];
+      if (body.state === 'alive' && canSwallow(body.radius, r)) this.swallow(body, hole);
     }
-    this.events.push({ type: 'tier', hole: hole.id, index: next });
+    this.field.feed(hole);
+    for (const comet of this.comets.objects) {
+      if (comet.active && comet.state === 'alive' && this.touches(hole, comet)) this.swallow(comet, hole);
+    }
+    for (const frag of this.debris.objects) {
+      if (this.debris.edible(frag) && this.touches(hole, frag)) this.swallow(frag, hole, hole.id === frag.ownerId);
+    }
+  }
+
+  /** True if the hole can swallow `obj` and is close enough to. */
+  private touches(hole: Hole, obj: Body): boolean {
+    if (!canSwallow(obj.radius, hole.radius)) return false;
+    const dx = obj.position.x - hole.position.x;
+    const dz = obj.position.z - hole.position.z;
+    const reach = hole.radius + obj.radius * PREY.eatReach;
+    return dx * dx + dz * dz < reach * reach;
+  }
+
+  /** Milestones only go up within a life. Reaching one is an event (the client plays the set piece). */
+  private checkMilestone(hole: Hole): void {
+    if (hole.phase !== 'playing') return;
+    const next = milestoneIndexForMass(hole.mass);
+    if (next <= hole.milestone) return;
+    hole.milestone = next;
+    this.events.push({ type: 'milestone', hole: hole.id, index: next });
   }
 }

@@ -35,9 +35,9 @@ export interface ShedEvent {
   mass: number;
 }
 
-/** A hole reached a new size tier (index into TIERS). */
-export interface TierEvent {
-  type: 'tier';
+/** A hole reached a new size milestone (index into MILESTONES). */
+export interface MilestoneEvent {
+  type: 'milestone';
   hole: number;
   index: number;
 }
@@ -49,4 +49,4 @@ export interface DiedEvent {
 }
 
 /** What render, audio, UI and juice react to. The world queues these as it steps; the client drains them each frame. */
-export type SimEvent = AteEvent | BumpedEvent | ShedEvent | TierEvent | DiedEvent;
+export type SimEvent = AteEvent | BumpedEvent | ShedEvent | MilestoneEvent | DiedEvent;

@@ -1,53 +1,74 @@
-import { DANGER, PREY, PREY_POOL_SIZE, tierMinRadius, type PreyClass, type Tier } from '../config/index.ts';
+import { ARENA, BODIES, DANGER } from '../config/index.ts';
 import { canSwallow, capture, createBody, spawned, type Body } from './body.ts';
-import { massOfRadius } from './Hole.ts';
+import { SpatialGrid } from './grid.ts';
+import { massOfRadius, viewDistance } from './Hole.ts';
 import type { World } from './World.ts';
 
 /**
- * Prey: a fixed pool of bodies. What spawns comes from the current tier's absolute prey table and entity
- * budget (the first `tier.count` slots are live), around the world's focus hole, at distances in its view
- * distance. Any hole that touches an edible body eats it and it falls in. Bodies never overlap each other:
- * overlapping pairs are pushed apart, and spawns avoid other bodies and keep big ones out of pull reach of the hole.
+ * The arena's individual bodies: dwarf planets, moons, planets and giants, a fixed population per class
+ * (BODIES), scattered across the whole arena. Each pool slot keeps its class. An eaten body falls into its hole and
+ * the slot respawns somewhere else in the arena, out of sight of every hole and clear of other bodies, so the
+ * population holds; while no such place exists (a hole big enough to see most of the arena) it waits, gone.
+ * Bodies sit still; overlapping ones are pushed apart. Queries go through a spatial grid that is rebuilt every step.
  */
 export class PreyField {
   readonly objects: Body[] = [];
+  /** Class of each slot (index into BODIES.classes). */
+  readonly classOf: Uint8Array;
+  /** The grid over the live bodies, as of the end of the last step. */
+  readonly grid: SpatialGrid;
+  /** Results of the last query: indices into objects. */
+  readonly found: Int32Array;
+  /** World time a gone slot tries to respawn again. */
+  private readonly retryAt: Float32Array;
+  /** Where each slot covered the field when it was placed (x, z, radius), to uncover the same patch later. */
+  private readonly covers: Float64Array;
   private readonly world: World;
-  private tier: Tier;
+  private readonly isAlive = (i: number) => this.objects[i].state === 'alive';
 
-  constructor(world: World, tier: Tier) {
+  constructor(world: World) {
     this.world = world;
-    this.tier = tier;
-    for (let i = 0; i < PREY_POOL_SIZE; i++) {
-      this.objects.push(createBody(tier.classes[0].color));
-      this.respawn(i, PREY.initialInner, PREY.initialOuter, false);
+    const classes = BODIES.classes;
+    const total = classes.reduce((n, c) => n + c.count, 0);
+    this.classOf = new Uint8Array(total);
+    for (let c = 0; c < classes.length; c++) {
+      for (let k = 0; k < classes[c].count; k++) {
+        const body = createBody(classes[c].color);
+        body.className = classes[c].name;
+        body.round = classes[c].round ?? false;
+        this.classOf[this.objects.length] = c;
+        this.objects.push(body);
+      }
     }
+    this.grid = new SpatialGrid(ARENA.radius + ARENA.edgeMargin, ARENA.gridLevels, total);
+    this.found = new Int32Array(total);
+    this.retryAt = new Float32Array(total);
+    this.covers = new Float64Array(total * 3);
   }
 
-  /** Live slots (the current tier's entity budget). */
+  /** Bodies in play (alive or falling in); the rest wait to respawn. */
   get liveCount(): number {
-    return this.tier.count;
+    let n = 0;
+    for (const obj of this.objects) if (obj.state !== 'gone') n++;
+    return n;
   }
 
-  /** The live tier. Slots beyond the old budget join and leftovers too small for the new table are refilled across the view. */
-  setTier(tier: Tier): void {
-    const oldCount = this.tier.count;
-    this.tier = tier;
-    const minRadius = tierMinRadius(tier);
-    for (let i = 0; i < tier.count; i++) {
-      const obj = this.objects[i];
-      if (i >= oldCount || (obj.state === 'alive' && obj.radius < minRadius)) this.respawn(i, PREY.initialInner, PREY.initialOuter, true);
-    }
-  }
-
-  /** Start of a new run: refill the whole pool across the view from the given tier's table. */
-  reset(tier: Tier): void {
-    this.tier = tier;
-    // Park everything far away first so the refill does not dodge the last run's bodies.
+  /** A fresh arena: every body placed anew, clear of the holes there are. */
+  reset(): void {
+    this.covers.fill(0);
     for (const obj of this.objects) {
-      obj.position.x = 1e9;
-      obj.position.z = 1e9;
+      obj.state = 'alive';
+      obj.position.x = obj.position.z = 1e9;
     }
-    for (let i = 0; i < PREY_POOL_SIZE; i++) this.respawn(i, PREY.initialInner, PREY.initialOuter, false);
+    // Biggest first: a giant needs a wide clear patch, which a field already full of small bodies would not have.
+    const order = this.objects.map((_, i) => i).sort((a, b) => this.classOf[b] - this.classOf[a] || a - b);
+    for (const i of order) this.respawn(i, true);
+    this.rebuild();
+  }
+
+  /** Indices of the live bodies within `reach + k * radius` of (x, z) (see SpatialGrid.query), into `found`; returns how many. */
+  query(x: number, z: number, reach: number, k: number): number {
+    return this.grid.query(x, z, reach, k, this.found);
   }
 
   /** Start of a step: remember positions for render interpolation. */
@@ -56,47 +77,57 @@ export class PreyField {
   }
 
   update(dt: number): void {
-    const focus = this.world.focus;
-    const view = focus.view.targetDistance;
-    const despawnSq = (PREY.despawnDistance * view) ** 2;
-    const respawnSq = (PREY.respawnInner * view) ** 2;
-    // Specks the focus hole has outgrown are recycled once they are off screen.
-    const staleRadius = focus.radius * PREY.minRelSize;
-
-    for (let i = 0; i < this.tier.count; i++) {
+    for (let i = 0; i < this.objects.length; i++) {
       const obj = this.objects[i];
       if (obj.state === 'eating') {
         obj.eatProgress += dt / obj.infallTime;
-        if (obj.eatProgress >= 1) this.respawn(i, PREY.respawnInner, PREY.respawnOuter, true);
-        continue;
-      }
-      obj.position.x += obj.velocity.x * dt;
-      obj.position.z += obj.velocity.z * dt;
-      obj.appear = Math.min(1, obj.appear + dt / PREY.appearTime);
-
-      const dx = obj.position.x - focus.position.x;
-      const dz = obj.position.z - focus.position.z;
-      const distSq = dx * dx + dz * dz;
-      const outOfSight = distSq > respawnSq;
-      if (distSq > despawnSq || (outOfSight && obj.radius < staleRadius)) {
-        this.respawn(i, PREY.respawnInner, PREY.respawnOuter, true);
-      } else {
-        this.world.feedOn(obj);
+        if (obj.eatProgress >= 1) this.respawn(i, false);
+      } else if (obj.state === 'gone') {
+        if (this.world.time >= this.retryAt[i]) this.respawn(i, false);
+      } else if (obj.position.x * obj.position.x + obj.position.z * obj.position.z > ARENA.radius * ARENA.radius) {
+        // Out of the arena (only something outside the rules puts it there): back in somewhere else.
+        this.respawn(i, false);
       }
     }
-
     this.separate(dt);
+    this.recover();
+    this.rebuild();
   }
 
-  /** Push overlapping live bodies apart, the lighter one moving more. O(n^2) over at most PREY_POOL_SIZE bodies, no allocations. */
+  /** Bodies pushed off the patch they cover: hand the old patch back to the field and cover the new one. */
+  private recover(): void {
+    const field = this.world.field;
+    for (let i = 0; i < this.objects.length; i++) {
+      const obj = this.objects[i];
+      const c = i * 3;
+      if (obj.state !== 'alive' || this.covers[c + 2] === 0) continue;
+      const moved = Math.hypot(obj.position.x - this.covers[c], obj.position.z - this.covers[c + 1]);
+      if (moved < obj.radius * 0.02) continue;
+      field.uncover(this.covers[c], this.covers[c + 1], this.covers[c + 2]);
+      field.cover(obj);
+      this.covers[c] = obj.position.x;
+      this.covers[c + 1] = obj.position.z;
+      this.covers[c + 2] = obj.radius;
+    }
+  }
+
+  /** Re-sort the live bodies into the grid (after anything moved them). */
+  rebuild(): void {
+    this.grid.rebuild(this.objects, this.isAlive);
+  }
+
+  /** Push overlapping live bodies apart, the lighter one moving more. Neighbours come from the grid. */
   private separate(dt: number): void {
     const k = Math.min(1, DANGER.separationRate * dt);
-    const n = this.tier.count;
-    for (let i = 0; i < n; i++) {
-      const a = this.objects[i];
+    const objects = this.objects;
+    for (let i = 0; i < objects.length; i++) {
+      const a = objects[i];
       if (a.state !== 'alive') continue;
-      for (let j = i + 1; j < n; j++) {
-        const b = this.objects[j];
+      const n = this.query(a.position.x, a.position.z, a.radius * DANGER.bodyPad, DANGER.bodyPad);
+      for (let f = 0; f < n; f++) {
+        const j = this.found[f];
+        if (j <= i) continue;
+        const b = objects[j];
         if (b.state !== 'alive') continue;
         const dx = b.position.x - a.position.x;
         const dz = b.position.z - a.position.z;
@@ -117,83 +148,94 @@ export class PreyField {
     }
   }
 
-  /** Reuse pool slot i as a fresh object from the current tier's table in an annulus around the focus hole (distances are in view distances). */
-  private respawn(i: number, innerRel: number, outerRel: number, animate: boolean): void {
+  /**
+   * Reuse slot i as a fresh body of its class somewhere in the arena. A respawn lands out of sight of every hole
+   * (ARENA.holeClearViews of its view distance) or, if a few random tries find no such place, waits gone and tries
+   * again later. The initial fill only keeps clear of each hole's reach. Either way a body a hole cannot eat lands out
+   * of its pull reach, and it avoids other bodies where it can.
+   */
+  private respawn(i: number, initial: boolean): void {
     const obj = this.objects[i];
-    const rng = this.world.rng;
-    const hole = this.world.focus;
-    const pr = hole.radius;
-    const view = hole.view.targetDistance;
-
-    const cls = this.pickClass(pr * PREY.minRelSize, obj);
+    const world = this.world;
+    const rng = world.rng;
+    // Whatever was hidden under its old place grows back in time.
+    const c = i * 3;
+    if (this.covers[c + 2] > 0) world.field.uncover(this.covers[c], this.covers[c + 1], this.covers[c + 2]);
+    this.covers[c + 2] = 0;
+    const cls = BODIES.classes[this.classOf[i]];
+    const r = rng.logUniform(cls.radius[0], cls.radius[1]);
     obj.className = cls.name;
     obj.round = cls.round ?? false;
     obj.color = cls.color;
-    obj.mass = massOfRadius(obj.radius);
-    obj.appear = animate ? 0 : 1;
+    obj.radius = r;
+    obj.mass = massOfRadius(r);
+    obj.velocity.x = obj.velocity.z = 0;
 
-    // Uniform over the annulus area. Keep clear of the hole so spawning never overlaps it, and keep bodies
-    // the hole cannot eat out of their pull reach where the annulus allows (huge ones end up at its outer edge).
-    const outer = outerRel * view;
-    let clear = pr + obj.radius * 1.5;
-    if (!canSwallow(obj.radius, pr)) clear = Math.max(clear, Math.min(outer, obj.radius * DANGER.pullReach + pr * (1 + DANGER.spawnClearance)));
-    const minDist = Math.max(innerRel * view, clear);
-    const maxDist = Math.max(outer, minDist + pr);
-    // A few tries to land clear of the other bodies; the separation pass sorts out the rare miss.
-    for (let attempt = 0; attempt < DANGER.spawnTries; attempt++) {
-      const dist = Math.sqrt(minDist * minDist + rng.next() * (maxDist * maxDist - minDist * minDist));
-      const angle = rng.next() * Math.PI * 2;
-      obj.position.x = hole.position.x + Math.cos(angle) * dist;
-      obj.position.z = hole.position.z + Math.sin(angle) * dist;
-      if (!this.overlapsOther(i)) break;
+    const spread = ARENA.radius - ARENA.edgeMargin - r;
+    // The first try clear of the holes and of other bodies wins; else the clearest one clear of the holes.
+    let clearX = 0;
+    let clearZ = 0;
+    let clearScore = -Infinity;
+    let found = false;
+    for (let attempt = 0; attempt < ARENA.respawnTries && !found; attempt++) {
+      const d = Math.sqrt(rng.next()) * spread;
+      const a = rng.next() * Math.PI * 2;
+      const x = Math.cos(a) * d;
+      const z = Math.sin(a) * d;
+      const spare = this.holeClearance(x, z, r, initial);
+      found = spare >= 0 && !this.overlapsOther(i, x, z, r);
+      if (found || spare > clearScore) {
+        clearScore = spare;
+        clearX = x;
+        clearZ = z;
+      }
     }
-
-    const driftAngle = rng.next() * Math.PI * 2;
-    const drift = rng.next() * PREY.driftSpeed * view;
-    obj.velocity.x = Math.cos(driftAngle) * drift;
-    obj.velocity.z = Math.sin(driftAngle) * drift;
+    if (clearScore < 0 && !initial) {
+      // Nowhere out of sight: wait.
+      obj.state = 'gone';
+      obj.eatProgress = 0;
+      obj.eaterId = -1;
+      this.retryAt[i] = world.time + ARENA.respawnRetry;
+      return;
+    }
+    obj.position.x = clearX;
+    obj.position.z = clearZ;
+    obj.appear = initial ? 1 : 0;
     spawned(obj, rng);
-  }
-
-  /** True if slot i overlaps another live body (other slots that exist yet). */
-  private overlapsOther(i: number): boolean {
-    const a = this.objects[i];
-    const n = Math.min(this.tier.count, this.objects.length);
-    for (let j = 0; j < n; j++) {
-      if (j === i) continue;
-      const b = this.objects[j];
-      if (b.state !== 'alive') continue;
-      const min = (a.radius + b.radius) * DANGER.bodyPad;
-      const dx = b.position.x - a.position.x;
-      const dz = b.position.z - a.position.z;
-      if (dx * dx + dz * dz < min * min) return true;
-    }
-    return false;
+    world.field.cover(obj);
+    this.covers[c] = obj.position.x;
+    this.covers[c + 1] = obj.position.z;
+    this.covers[c + 2] = obj.radius;
   }
 
   /**
-   * Draw a class by weight and a radius within it, and store the radius on `obj`. Samples below
-   * `minRadius` (specks next to the current hole) are redrawn a few times so the screen stays full of useful prey.
+   * Smallest distance to spare from any hole in play (Infinity with none). A body a hole cannot eat also keeps out
+   * of its own pull reach of it, so nothing pulls a hole from nowhere.
    */
-  private pickClass(minRadius: number, obj: Body): PreyClass {
-    const rng = this.world.rng;
-    const classes = this.tier.classes;
-    let total = 0;
-    for (const c of classes) total += c.weight;
-    let cls = classes[0];
-    for (let attempt = 0; attempt < 8; attempt++) {
-      let roll = rng.next() * total;
-      cls = classes[classes.length - 1];
-      for (const c of classes) {
-        roll -= c.weight;
-        if (roll <= 0) {
-          cls = c;
-          break;
-        }
-      }
-      obj.radius = rng.logUniform(cls.radius[0], cls.radius[1]);
-      if (obj.radius >= minRadius) break;
+  private holeClearance(x: number, z: number, r: number, initial: boolean): number {
+    let best = Infinity;
+    for (const hole of this.world.holes) {
+      if (hole.phase === 'over') continue;
+      let need = canSwallow(r, hole.radius) ? hole.radius + r * 1.5 : r * DANGER.pullReach + hole.radius * 2;
+      if (!initial) need = Math.max(need, ARENA.holeClearViews * viewDistance(hole.radius) + r);
+      const spare = Math.hypot(x - hole.position.x, z - hole.position.z) - need;
+      if (spare < best) best = spare;
     }
-    return cls;
+    return best;
+  }
+
+  /** True if a body of radius r at (x, z) would overlap another live body than slot i. */
+  private overlapsOther(i: number, x: number, z: number, r: number): boolean {
+    const objects = this.objects;
+    for (let j = 0; j < objects.length; j++) {
+      if (j === i) continue;
+      const b = objects[j];
+      if (b.state !== 'alive') continue;
+      const min = (r + b.radius) * DANGER.bodyPad;
+      const dx = b.position.x - x;
+      const dz = b.position.z - z;
+      if (dx * dx + dz * dz < min * min) return true;
+    }
+    return false;
   }
 }

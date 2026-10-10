@@ -163,8 +163,8 @@ export class AudioEngine {
     this.guard(() => this.sfx?.eat(preyRadius / Math.max(1e-6, holeRadius)), 'eat');
   }
 
-  tierUp(): void {
-    this.guard(() => this.sfx?.tierUp(), 'tierUp');
+  milestone(): void {
+    this.guard(() => this.sfx?.milestone(), 'milestone');
   }
 
   /** A collision with a body or comet. */

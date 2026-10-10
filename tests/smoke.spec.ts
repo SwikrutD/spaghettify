@@ -7,6 +7,16 @@ interface InstancedMeshProbe {
   geometry: { index: unknown; attributes: { aStretch: { array: Float32Array } } };
 }
 
+interface BodyProbe {
+  position: { x: number; z: number; set(x: number, y: number, z: number): void };
+  velocity: { set(x: number, y: number, z: number): void };
+  radius: number;
+  mass: number;
+  className: string;
+  round: boolean;
+  state: string;
+}
+
 interface Debug {
   frames: number;
   mode: string;
@@ -28,11 +38,13 @@ interface Debug {
     radiusForMass(): number;
     setRadius(r: number): void;
     startMass: number;
+    peakMass: number;
+    score: number;
   };
   hunger: { phase: string; idle: number; level: number; enabled: boolean; floorMass: number; runTime: number };
   hungerOverlay: { level: number };
-  tiers: { index: number; tier: { title: string; count: number; cameraScale: number }; timeScale: number };
-  allTiers: { title: string; minMass: number; count: number; cameraScale: number; classes: { radius: [number, number] }[] }[];
+  milestones: { index: number; all: { title: string; unlocks: string | null }[]; masses: number[] };
+  field: { enabled: boolean };
   camera: {
     targetDistance: number;
     viewScale: number;
@@ -43,17 +55,13 @@ interface Debug {
   touch: { touching: boolean; mode: string };
   input: { move: { x: number; y: number } };
   prey: {
-    objects: {
-      position: { x: number; z: number; set(x: number, y: number, z: number): void };
-      velocity: { set(x: number, y: number, z: number): void };
-      radius: number;
-      mass: number;
-      className: string;
-      round: boolean;
-      state: string;
-    }[];
+    objects: BodyProbe[];
+    liveCount: number;
+    counts: number[];
     isEdible(obj: unknown): boolean;
-    meshOf(i: number): InstancedMeshProbe;
+    instanceOf(i: number): { mesh: InstancedMeshProbe; index: number } | null;
+    edible(radius?: number, gap?: number): BodyProbe;
+    clear(): void;
     group: { children: InstancedMeshProbe[] };
   };
   audio: {
@@ -76,7 +84,7 @@ interface Debug {
     launched: number;
     launch(x: number, z: number, vx: number, vz: number, radius: number): unknown;
     spawn(): unknown;
-    reset(tier: unknown): void;
+    reset(): void;
   };
   shedBurst: { live: number };
   debris: {
@@ -153,9 +161,10 @@ test('game loads, renders frames without console errors and the player moves', a
 
   const start = await page.evaluate(() => ({ ...window.__spaghettify.player.position }));
 
-  // Pointer to the right of centre: the hole should drift right.
+  // Pointer to the right of centre: the hole should drift right (software rendering is slow, so wait for it).
   await page.mouse.move(1000, 360);
   await page.waitForTimeout(3000);
+  await page.waitForFunction((x) => window.__spaghettify.player.position.x > x + 1, start.x, { timeout: 20_000 });
 
   const end = await page.evaluate(() => ({
     x: window.__spaghettify.player.position.x,
@@ -189,8 +198,8 @@ test('eating a smaller object grows the player; bigger objects are left alone', 
 
   const before = await page.evaluate(() => {
     const { player, prey } = window.__spaghettify;
-    const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
-    if (!target) throw new Error('no edible prey in the pool');
+    const target = prey.edible();
+    if (!prey.isEdible(target)) throw new Error('not edible');
     // Park the player on the prey so contact is guaranteed.
     player.position.x = target.position.x;
     player.position.z = target.position.z;
@@ -242,7 +251,7 @@ test('lensing bends the disk around the hole and the core stays black', async ({
   const probe = (samples: number) =>
     page.evaluate(async (samples) => {
       const d = window.__spaghettify;
-      for (const o of d.prey.objects) o.position.x += 1000;
+      d.prey.clear();
       d.renderer.lensing.setSamples(samples);
       const start = d.frames;
       while (d.frames < start + 3) await new Promise(requestAnimationFrame);
@@ -301,32 +310,31 @@ test('edible prey spaghettify: they stretch toward the hole and drain into the c
       const f = d.frames;
       while (d.frames === f) await new Promise(requestAnimationFrame);
     };
-    // What the GPU gets for instance i: direction from the hole, stretch, centre and scale.
+    // What the GPU gets for arena body i, wherever it was drawn: direction from the hole, stretch, centre and scale.
     const read = (i: number) => {
-      const mesh = prey.meshOf(i);
+      const drawn = prey.instanceOf(i);
+      if (!drawn) throw new Error('body not drawn');
+      const { mesh, index: j } = drawn;
       const s = mesh.geometry.attributes.aStretch.array;
       const m = mesh.instanceMatrix.array;
-      const dx = m[i * 16 + 12] - player.position.x;
-      const dz = m[i * 16 + 14] - player.position.z;
+      const dx = m[j * 16 + 12] - player.position.x;
+      const dz = m[j * 16 + 14] - player.position.z;
       const dist = Math.hypot(dx, dz);
       return {
-        dirLen: Math.hypot(s[i * 4], s[i * 4 + 1]),
+        dirLen: Math.hypot(s[j * 4], s[j * 4 + 1]),
         // Cosine between the stretch axis and the line from the hole to the object.
-        align: dist > 1e-3 ? (s[i * 4] * dx + s[i * 4 + 1] * dz) / dist : 1,
-        stretch: s[i * 4 + 2],
+        align: dist > 1e-3 ? (s[j * 4] * dx + s[j * 4 + 1] * dz) / dist : 1,
+        stretch: s[j * 4 + 2],
         dist,
-        scale: Math.hypot(m[i * 16], m[i * 16 + 1], m[i * 16 + 2]),
+        scale: Math.hypot(m[j * 16], m[j * 16 + 1], m[j * 16 + 2]),
       };
     };
 
-    // Clear the field around the hole, then take the biggest edible object.
-    for (const o of prey.objects) o.position.x += 1000;
-    let index = -1;
-    prey.objects.forEach((o, i) => {
-      if (o.state === 'alive' && prey.isEdible(o) && (index < 0 || o.radius > prey.objects[index].radius)) index = i;
-    });
-    if (index < 0) throw new Error('no edible prey in the pool');
-    const obj = prey.objects[index];
+    // Clear the field around the hole, then make one big edible rock.
+    prey.clear();
+    await nextFrame();
+    const obj = prey.edible(player.radius * 0.9);
+    const index = prey.objects.length - 1;
     const pr = player.radius;
     obj.velocity.set(0, 0, 0);
 
@@ -380,7 +388,7 @@ test('edible prey spaghettify: they stretch toward the hole and drain into the c
   expect(errors).toEqual([]);
 });
 
-test('crossing a mass threshold changes tier: prey table, entity budget and camera scale', async ({ page }) => {
+test('size milestones: eating across one shows its banner; the zoom stays continuous and every class shares the arena', async ({ page }) => {
   test.setTimeout(180_000);
   await page.setViewportSize({ width: 480, height: 270 });
   const errors: string[] = [];
@@ -395,105 +403,86 @@ test('crossing a mass threshold changes tier: prey table, entity budget and came
   await startRun(page);
   await page.evaluate(() => (window.__spaghettify.hunger.enabled = false));
 
-  // Grow to just under a tier threshold, let the radius catch up, then eat one more object to cross it.
-  const crossInto = (tierIndex: number) =>
-    page.evaluate(async (tierIndex) => {
+  // Grow to just under a milestone, let the radius catch up, then eat one more thing to cross it.
+  const crossInto = (index: number) =>
+    page.evaluate(async (index) => {
       const d = window.__spaghettify;
-      const { player, prey, tiers, allTiers } = d;
+      const { player, prey, milestones } = d;
       const nextFrame = async () => {
         const f = d.frames;
         while (d.frames === f) await new Promise(requestAnimationFrame);
       };
-      if (tiers.index !== tierIndex - 1) throw new Error(`expected tier ${tierIndex - 1}, got ${tiers.index}`);
-      // Keep the hole from eating anything while it grows to the threshold: flush the field out to the respawn ring.
-      for (const o of prey.objects) o.position.x += 100000;
-      await nextFrame();
-      const before = { count: tiers.tier.count, distance: d.camera.targetDistance, scale: tiers.tier.cameraScale };
-      player.mass = allTiers[tierIndex].minMass - 0.02;
+      if (milestones.index !== index - 1) throw new Error(`expected milestone ${index - 1}, got ${milestones.index}`);
+      // Nothing to eat by accident while it grows to the threshold.
+      prey.clear();
+      player.mass = milestones.masses[index] - 0.02;
       for (let i = 0; i < 600 && Math.abs(player.radius - player.radiusForMass()) > 0.01 * player.radius; i++) await nextFrame();
-      if (tiers.index !== tierIndex - 1) throw new Error('crossed the threshold early');
-
-      // Park on the biggest edible object that is heavy enough to finish the job.
-      let target: (typeof prey.objects)[number] | undefined;
-      for (const o of prey.objects.slice(0, tiers.tier.count)) {
-        if (o.state === 'alive' && prey.isEdible(o) && o.mass > 0.02 && (!target || o.radius > target.radius)) target = o;
-      }
-      if (!target) throw new Error('no edible prey to cross the threshold with');
+      if (milestones.index !== index - 1) throw new Error('crossed the milestone early');
+      const before = d.camera.targetDistance;
+      const target = prey.edible(player.radius * 0.6);
       const eaten = { name: target.className, radius: target.radius };
       player.velocity.x = player.velocity.z = 0;
       player.position.x = target.position.x;
       player.position.z = target.position.z;
-      for (let i = 0; i < 120 && tiers.index !== tierIndex; i++) await nextFrame();
-      if (tiers.index !== tierIndex) throw new Error('tier did not change');
-
-      // The set piece dips game time, then the view settles on the new scale.
+      for (let i = 0; i < 120 && milestones.index !== index; i++) await nextFrame();
+      if (milestones.index !== index) throw new Error('milestone not reached');
       await nextFrame();
-      await nextFrame();
-      const dip = tiers.timeScale;
-      const live = prey.objects.slice(0, tiers.tier.count);
-      const minRadius = Math.min(...allTiers[tierIndex].classes.map((c) => c.radius[0]));
-      const tooSmall = live.filter((o) => o.state === 'alive' && o.radius < minRadius).length;
       return {
         before,
-        after: { count: tiers.tier.count, distance: d.camera.targetDistance, scale: tiers.tier.cameraScale },
-        dip,
-        tooSmall,
-        title: tiers.tier.title,
+        after: d.camera.targetDistance,
+        title: milestones.all[index].title,
         eaten,
         biggest: player.biggestEaten,
-        banner: document.querySelector('[data-testid="tier-banner"]')?.textContent ?? '',
+        sound: d.audio.played.milestone ?? 0,
+        banner: document.querySelector('[data-testid="milestone-banner"]')?.textContent ?? '',
       };
-    }, tierIndex);
+    }, index);
 
-  for (const tierIndex of [1, 2]) {
-    const r = await crossInto(tierIndex);
-    // New scene scale: the camera heads further out than it was.
-    expect(r.after.scale).toBeGreaterThan(r.before.scale);
-    expect(r.after.distance).toBeGreaterThan(r.before.distance);
-    // Slow motion during the set piece.
-    expect(r.dip).toBeLessThan(1);
-    // New prey table: nothing left from the old table that the new one does not have.
-    expect(r.tooSmall).toBe(0);
-    expect(r.biggest?.radius).toBeGreaterThanOrEqual(r.eaten.radius);
+  for (const index of [1, 2]) {
+    const r = await crossInto(index);
     expect(r.banner).toContain(r.title);
-    // Let the slow motion pass before the next climb.
-    await page.waitForFunction(() => window.__spaghettify.tiers.timeScale === 1);
+    // The view follows the radius continuously: a little further out, no jump.
+    expect(r.after).toBeGreaterThanOrEqual(r.before);
+    expect(r.after).toBeLessThan(r.before * 1.2);
+    expect(r.biggest?.radius).toBeGreaterThanOrEqual(r.eaten.radius);
   }
+  expect((await crossInto(3)).title).toBe('Asteroid eater');
 
-  // The new prey table is what spawns now: wait for respawns and check every live object fits a table.
-  const final = await page.evaluate(() => {
-    const { prey, tiers, allTiers } = window.__spaghettify;
-    const classes = allTiers[tiers.index].classes;
-    const lo = Math.min(...classes.map((c) => c.radius[0]));
-    const hi = Math.max(...classes.map((c) => c.radius[1]));
-    const live = prey.objects.slice(0, tiers.tier.count);
-    // Planets and moons are drawn as smooth spheres, the rest as flat-shaded rocks; each slot shows in one mesh only.
-    const scale = (m: InstancedMeshProbe, i: number) => Math.hypot(...m.instanceMatrix.array.slice(i * 16, i * 16 + 3));
-    const misdrawn = live.filter((o, i) => {
-      const own = prey.meshOf(i);
-      const other = prey.group.children.find((m) => m !== own)!;
-      return own.material.flatShading === o.round || scale(own, i) === 0 || scale(other, i) !== 0;
-    }).length;
-    const sphereMesh = prey.group.children.find((m) => !m.material.flatShading)!;
+  // One arena for every size: every body class is out there at its full population, and next to a moon the camera
+  // draws it as a smooth sphere among the small rocks of the field.
+  const mixed = await page.evaluate(async () => {
+    const d = window.__spaghettify;
+    const { player, prey } = d;
+    const names = [...new Set(prey.objects.map((o) => o.className))];
+    // A moon well away from the patch that prey.clear() emptied around the hole.
+    const i = prey.objects.findIndex(
+      (o) => o.className === 'moon' && o.state === 'alive' && Math.hypot(o.position.x - player.position.x, o.position.z - player.position.z) > 800,
+    );
+    const moon = prey.objects[i];
+    player.position.x = moon.position.x + moon.radius + player.radius * 6;
+    player.position.z = moon.position.z;
+    // Let the camera catch up with the jump.
+    for (let k = 0; k < 60; k++) {
+      const f = d.frames;
+      while (d.frames === f) await new Promise(requestAnimationFrame);
+    }
+    const drawn = prey.instanceOf(i);
     return {
-      index: tiers.index,
-      count: live.length,
-      outside: live.filter((o) => o.state === 'alive' && (o.radius < lo || o.radius > hi)).length,
-      round: live.filter((o) => o.round).length,
-      misdrawn,
+      names,
+      counts: prey.counts,
+      live: prey.liveCount,
+      total: prey.objects.length,
+      moonSmooth: drawn ? !drawn.mesh.material.flatShading && drawn.mesh.geometry.index !== null : null,
       meshes: prey.group.children.length,
-      sphereIndexed: sphereMesh.geometry.index !== null,
-      roundNames: [...new Set(live.filter((o) => o.round).map((o) => o.className))],
     };
   });
-  expect(final.index).toBe(2);
-  expect(final.outside).toBe(0);
-  expect(final.meshes).toBe(2);
-  expect(final.round).toBeGreaterThan(0);
-  expect(final.round).toBeLessThan(final.count);
-  expect(final.misdrawn).toBe(0);
-  expect(final.sphereIndexed).toBe(true);
-  for (const name of final.roundNames) expect(['dwarf planet', 'moon', 'rocky planet', 'ice giant', 'gas giant']).toContain(name);
+  for (const name of ['dwarf planet', 'moon', 'rocky planet', 'ice giant', 'gas giant']) expect(mixed.names).toContain(name);
+  expect(mixed.live).toBe(mixed.total);
+  expect(mixed.meshes).toBe(4);
+  expect(mixed.moonSmooth).toBe(true);
+  // Rocks of the field (tiny, low and full detail) and at least the moon as a sphere.
+  expect(mixed.counts[0] + mixed.counts[1] + mixed.counts[2]).toBeGreaterThan(20);
+  expect(mixed.counts[3]).toBeGreaterThan(0);
 
   expect(errors).toEqual([]);
 });
@@ -600,8 +589,7 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   // Eat one thing so the score screen has a biggest meal to report.
   await page.evaluate(async () => {
     const d = window.__spaghettify;
-    const target = d.prey.objects.find((o) => o.state === 'alive' && d.prey.isEdible(o));
-    if (!target) throw new Error('no edible prey in the pool');
+    const target = d.prey.edible();
     d.player.position.x = target.position.x;
     d.player.position.z = target.position.z;
     while (d.player.eatenCount < 1) await new Promise(requestAnimationFrame);
@@ -612,7 +600,7 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   // Skip most of the grace period: mass must start draining and the warning must show.
   const massBefore = await page.evaluate(() => {
     const d = window.__spaghettify;
-    d.prey.objects.forEach((o) => (o.position.x += 100000));
+    d.prey.clear();
     d.hunger.idle = 6.9;
     return d.player.mass;
   });
@@ -630,16 +618,17 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   await expect(page.locator('[data-testid="score-screen"]')).toBeVisible({ timeout: 20_000 });
   expect(await page.evaluate(() => window.__spaghettify.hunger.phase)).toBe('over');
 
-  const eatenMass = await page.evaluate(() => window.__spaghettify.player.eatenMass);
+  // Score: the peak mass of the life over the start mass, in points.
+  const peak = await page.evaluate(() => ({ peak: window.__spaghettify.player.peakMass, start: window.__spaghettify.player.startMass }));
   const score = Number((await page.locator('[data-testid="score"]').textContent())!.replace(/,/g, ''));
   expect(score).toBeGreaterThan(0);
-  expect(score).toBe(Math.round(eatenMass * 1000));
+  expect(score).toBe(Math.round((peak.peak - peak.start) * 1000));
   const ladder = (await page.locator('[data-testid="ladder"]').textContent())!;
   expect(ladder).toMatch(/^You ate an? /);
   const run = await page.evaluate(() => ({ biggest: window.__spaghettify.player.biggestEaten!.name, count: window.__spaghettify.player.eatenCount }));
   expect(ladder).toContain(run.biggest);
   const stats = (await page.locator('[data-testid="stats"]').textContent())!;
-  expect(stats).toContain('Tier reached1: Debris');
+  expect(stats).toContain('Size reachedDust eater');
   expect(stats).toContain(`Objects eaten${run.count}`);
 
   // Play again: everything is back to a fresh run.
@@ -655,13 +644,12 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
       radius: d.player.radius,
       eatenCount: d.player.eatenCount,
       biggest: d.player.biggestEaten,
-      tier: d.tiers.index,
+      milestone: d.milestones.index,
       idle: d.hunger.idle,
       starvation: d.player.disk.starvation,
       heat: d.player.disk.heat,
-      timeScale: d.tiers.timeScale,
-      live: d.prey.objects.slice(0, d.tiers.tier.count).filter((o) => o.state === 'alive' && Math.hypot(o.position.x, o.position.z) < 1000).length,
-      count: d.tiers.tier.count,
+      live: d.prey.objects.filter((o) => o.state === 'alive').length,
+      count: d.prey.objects.length,
       viewScale: d.camera.viewScale,
     };
   });
@@ -669,19 +657,17 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   expect(fresh.radius).toBeCloseTo(0.5, 1);
   expect(fresh.eatenCount).toBe(0);
   expect(fresh.biggest).toBeNull();
-  expect(fresh.tier).toBe(0);
+  expect(fresh.milestone).toBe(0);
   expect(fresh.idle).toBeLessThan(1);
   expect(fresh.starvation).toBeLessThan(0.05);
   expect(fresh.heat).toBeLessThan(0.2);
-  expect(fresh.timeScale).toBe(1);
   expect(fresh.live).toBe(fresh.count);
   expect(fresh.viewScale).toBeCloseTo(1, 1);
 
   // And the new run can be played: the hole eats again.
   const ate = await page.evaluate(async () => {
     const d = window.__spaghettify;
-    const target = d.prey.objects.find((o) => o.state === 'alive' && d.prey.isEdible(o));
-    if (!target) throw new Error('no edible prey after restart');
+    const target = d.prey.edible();
     d.player.position.x = target.position.x;
     d.player.position.z = target.position.z;
     for (let i = 0; i < 200 && d.player.eatenCount < 1; i++) await new Promise(requestAnimationFrame);
@@ -696,13 +682,12 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
 async function playShortRun(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const d = window.__spaghettify;
-    const target = d.prey.objects.find((o) => o.state === 'alive' && d.prey.isEdible(o));
-    if (!target) throw new Error('no edible prey in the pool');
+    const target = d.prey.edible();
     d.player.position.x = target.position.x;
     d.player.position.z = target.position.z;
     while (d.player.eatenCount < 1) await new Promise(requestAnimationFrame);
     while (d.snapshot.taken < 1) await new Promise(requestAnimationFrame);
-    d.prey.objects.forEach((o) => (o.position.x += 100000));
+    d.prey.clear();
     d.hunger.idle = 100;
     d.player.mass = d.hunger.floorMass * 1.01;
   });
@@ -832,7 +817,7 @@ test('leaderboard: the title shows the top few, the score screen posts the run a
   await startRun(page);
   await playShortRun(page);
   await expect(page.getByTestId('board-status')).toHaveText('Your best: 900. You are #4 of 42.');
-  const run = await page.evaluate(() => ({ score: Math.round(window.__spaghettify.player.eatenMass * 1000), eaten: window.__spaghettify.player.eatenCount, seconds: window.__spaghettify.hunger.runTime }));
+  const run = await page.evaluate(() => ({ score: window.__spaghettify.player.score, eaten: window.__spaghettify.player.eatenCount, seconds: window.__spaghettify.hunger.runTime }));
   expect(posted).toHaveLength(1);
   expect(posted[0]).toMatchObject({ nickname: 'Pea', score: run.score, tier: 1, eaten: run.eaten });
   expect(posted[0].seconds as number).toBeCloseTo(run.seconds, 0);
@@ -909,8 +894,7 @@ test('audio: the context is created after a click, events trigger sounds, and th
   // Eating triggers the eat sound.
   await page.evaluate(() => {
     const { player, prey } = window.__spaghettify;
-    const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
-    if (!target) throw new Error('no edible prey in the pool');
+    const target = prey.edible();
     player.position.x = target.position.x;
     player.position.z = target.position.z;
   });
@@ -940,7 +924,7 @@ test('audio: the context is created after a click, events trigger sounds, and th
   expect(errors).toEqual([]);
 });
 
-test('audio: tier-up, hunger warning and evaporation each trigger their sound; restart is clean', async ({ page }) => {
+test('audio: a size milestone, the hunger warning and evaporation each trigger their sound; restart is clean', async ({ page }) => {
   const errors: string[] = [];
   page.on('console', (m) => {
     if (m.type() === 'error') errors.push(m.text());
@@ -953,24 +937,23 @@ test('audio: tier-up, hunger warning and evaporation each trigger their sound; r
   await startRun(page, true);
   await page.waitForFunction(() => window.__spaghettify.audio.context !== null);
 
-  // Tier-up: set the mass just under tier 2 and eat something.
+  // Milestone: set the mass just under the first one and eat something.
   await page.evaluate(() => {
-    const { player, prey, allTiers, hunger } = window.__spaghettify;
+    const { player, prey, milestones, hunger } = window.__spaghettify;
     hunger.enabled = false;
-    player.mass = allTiers[1].minMass - 0.01;
-    const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
-    if (!target) throw new Error('no edible prey in the pool');
+    player.mass = milestones.masses[1] - 0.01;
+    const target = prey.edible();
     player.position.x = target.position.x;
     player.position.z = target.position.z;
   });
-  await page.waitForFunction(() => (window.__spaghettify.audio.played.tierUp ?? 0) > 0);
+  await page.waitForFunction(() => (window.__spaghettify.audio.played.milestone ?? 0) > 0);
 
   // Hunger: the warning pulses, then the evaporation sound plays once. The hole is held still and the
-  // prey moved far away, or it can keep eating the refilled tier's prey and never starve.
+  // field around it cleared, or it can keep eating and never starve.
   await page.mouse.move(240, 160);
   await page.evaluate(() => {
     const { hunger, prey } = window.__spaghettify;
-    for (const o of prey.objects) o.position.x += 1000;
+    prey.clear();
     hunger.enabled = true;
     hunger.idle = 100;
   });
@@ -1014,8 +997,7 @@ test('audio: with Web Audio unavailable the game still runs and nothing errors',
   await page.getByTestId('resume').click();
   await page.evaluate(() => {
     const { player, prey } = window.__spaghettify;
-    const target = prey.objects.find((o) => o.state === 'alive' && prey.isEdible(o));
-    if (!target) throw new Error('no edible prey in the pool');
+    const target = prey.edible();
     player.position.x = target.position.x;
     player.position.z = target.position.z;
   });
@@ -1441,8 +1423,8 @@ test.describe('dangers', () => {
         d.hunger.enabled = false;
         player.mass *= grow;
         player.setRadius(player.radiusForMass());
-        // Everything else respawns on the ring off screen, out of pull reach.
-        for (const o of prey.objects) o.position.x += 100000;
+        // Everything else respawns out of sight and out of pull reach, and the small matter around is cleared.
+        prey.clear();
         const body = prey.objects[0];
         body.radius = player.radius * sizeRatio;
         body.mass = body.radius * body.radius;
@@ -1540,13 +1522,10 @@ test.describe('dangers', () => {
     expect(hit.hot).toBeGreaterThan(0.7);
 
     // The visible radius drops fast: all the way down within half a second of game time. The rest of the
-    // field is sent off every frame meanwhile so nothing else is eaten.
+    // field around was cleared at the start, so nothing else is eaten.
     const shrunk = await page.evaluate(async (t) => {
-      const { player, debris, prey, hunger } = window.__spaghettify;
-      while (hunger.runTime < t + 0.5) {
-        for (let i = 1; i < prey.objects.length; i++) prey.objects[i].position.x += 100000;
-        await new Promise(requestAnimationFrame);
-      }
+      const { player, debris, hunger } = window.__spaghettify;
+      while (hunger.runTime < t + 0.5) await new Promise(requestAnimationFrame);
       return { radius: player.radius, target: player.radiusForMass(), heat: Math.max(...debris.objects.filter((f) => f.active).map((f) => f.heat)) };
     }, hit.time);
     expect(shrunk.radius).toBeLessThan(before.radius * 0.92);
@@ -1590,19 +1569,14 @@ test.describe('dangers', () => {
       page.evaluate(async (setup) => {
         const d = window.__spaghettify;
         const { player, prey, dangers, hunger, debris, comets } = d;
-        // Every frame the rest of the field is sent off to respawn far away, so nothing else is eaten meanwhile.
-        const frame = () => {
-          for (let i = 1; i < prey.objects.length; i++) prey.objects[i].position.x += 100000;
-          return new Promise(requestAnimationFrame);
-        };
+        // The field around was cleared at the start (and nothing drifts in), so nothing else is eaten meanwhile.
+        const frame = () => new Promise(requestAnimationFrame);
         while (dangers.invulnerable > 0) await frame();
         // Eating debris back would muddle the masses here; the debris test covers it.
         debris.reset();
-        comets.reset(d.tiers.tier);
+        comets.reset();
         if (setup === 'drained') {
-          // As if starving had drained the hole to just over its hunger floor, with the drain still running.
-          player.mass = hunger.floorMass * 1.02;
-          player.setRadius(player.radiusForMass());
+          // Starving, with the drain running at full strength.
           hunger.enabled = true;
           hunger.idle = 60;
         }
@@ -1638,8 +1612,8 @@ test.describe('dangers', () => {
       expect(r.after.shed).toBeGreaterThan(r.mass * 0.18);
       expect(r.after.shed).toBeLessThan(r.mass * 0.3);
       expect(r.after.fragments).toBeGreaterThan(0);
-      // The hit itself never starves the hole: the floor drops to 0.8 of what is left (the drain may have taken a sliver since).
-      expect(r.after.floor).toBeLessThan(r.after.mass * 0.85);
+      // The hit itself never starves the hole: what is left is far above the evaporation mass.
+      expect(r.after.floor).toBeLessThan(r.after.mass * 0.5);
       expect(r.after.phase).toBe('playing');
       expect(r.later.phase).toBe('playing');
       expect(r.later.mass).toBeGreaterThan(r.later.floor);
@@ -1751,7 +1725,7 @@ test.describe('dangers', () => {
     const spawned = await page.evaluate(() => {
       const d = window.__spaghettify;
       const { comets, player, camera } = d;
-      comets.reset(d.tiers.tier);
+      comets.reset();
       comets.spawn();
       const c = comets.objects.find((o) => o.active)!;
       const dx = player.position.x - c.position.x;
@@ -1762,7 +1736,7 @@ test.describe('dangers', () => {
         heading: (dx * c.velocity.x + dz * c.velocity.z) / (Math.hypot(dx, dz) * speed),
         speed: speed / camera.targetDistance,
       };
-      comets.reset(d.tiers.tier);
+      comets.reset();
       return result;
     });
     expect(spawned.dist).toBeCloseTo(1.3, 2);
@@ -1821,7 +1795,7 @@ test.describe('dangers', () => {
       const d = window.__spaghettify;
       const { comets, player } = d;
       const eaten = player.eatenCount;
-      comets.reset(d.tiers.tier);
+      comets.reset();
       // The hit's debris would be a meal too.
       d.debris.reset();
       // Hold the hole still after the knockback.

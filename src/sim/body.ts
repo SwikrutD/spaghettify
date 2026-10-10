@@ -2,7 +2,8 @@ import { PREY, SPAGHETTI, type PreyColor } from '../config/index.ts';
 import type { Rng } from './rng.ts';
 import { vec2, type Vec2 } from './vec.ts';
 
-export type BodyState = 'alive' | 'eating';
+/** 'gone': a pooled body out of play, waiting for a place to respawn (arena bodies only). */
+export type BodyState = 'alive' | 'eating' | 'gone';
 
 /** One pooled body: a prey object, a comet nucleus or a debris fragment. Pools never grow or shrink; entries are reused. */
 export interface Body {
