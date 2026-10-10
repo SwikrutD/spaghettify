@@ -666,7 +666,8 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
       biggest: d.player.biggestEaten,
       milestone: d.milestones.index,
       idle: d.hunger.idle,
-      starvation: d.player.disk.starvation,
+      // The hunger dimming (the disk also blinks during the respawn protection, which is not hunger).
+      starvation: d.hungerOverlay.level,
       heat: d.player.disk.heat,
       live: d.prey.objects.filter((o) => o.state === 'alive').length,
       count: d.prey.objects.length,

@@ -76,3 +76,64 @@ export const NET = {
   /** Lives that end with fewer points than this are not posted to the leaderboard. */
   minPostScore: 1,
 } as const;
+
+/**
+ * The game's side of online play (src/net): connecting, predicting the own hole, drawing everything else a little in
+ * the past, and falling back to the offline arena. Times are real seconds. Not part of the shared rules (the server
+ * does not read these).
+ */
+export const NET_CLIENT = {
+  /**
+   * Seconds to connect and be welcomed before the game falls back to the offline arena (a refused connection or a
+   * proxy with no server behind it fails at once; this is for a link that never answers).
+   */
+  connectSeconds: 10,
+  /**
+   * An open connection that delivers nothing for this long is treated as dropped (snapshots come 20 times a second;
+   * a phone between cells can go quiet for a few seconds and recover).
+   */
+  stallSeconds: 8,
+  /** Seconds between pings (the round trip time on screen). */
+  pingSeconds: 1,
+  /**
+   * Input goes out at most once a frame and every this many steps (30 a second at 60 steps): NET.limits counts every
+   * message. The own hole is predicted with the input as sent, so prediction and server steer it alike.
+   */
+  inputSteps: 2,
+  /** Other holes are drawn this far behind the newest snapshot (two snapshots of slack for late ones). */
+  interpDelay: 0.1,
+  /** Past their newest snapshot other holes carry on along their last motion for at most this long, then wait. */
+  maxExtrapolate: 0.05,
+  /** Snapshots whose arrival times set the server clock (the earliest arrival in the window wins: the least delayed). */
+  clockWindow: 40,
+  /** The drawing clock eases toward a new server clock at most this fast (a fraction of real time), and jumps past this many steps. */
+  clockSlew: 0.1,
+  clockJumpSteps: 30,
+  /** Prediction replays at most this many steps after a snapshot (a slower link plays with less prediction). */
+  maxReplaySteps: 60,
+  /**
+   * The lead between the own prediction and the server's steps moves by one only after this many snapshots in a row
+   * disagree with it (network jitter), at once when they disagree by `leadJump` steps or more (a stall).
+   */
+  leadStreak: 3,
+  leadJump: 3,
+  /** A correction of the own hole fades out with this time constant; one bigger than snapViews view distances snaps. */
+  correctionTime: 0.1,
+  snapViews: 0.3,
+  /** The prediction clock runs at most this much time in one frame; a longer stall is skipped. */
+  maxFrameSeconds: 0.25,
+  /** Queued snapshots past this (a hidden tab draws no frames) are applied at once, their effects dropped. */
+  maxQueued: 60,
+  /** Play again goes out this long after the life ended (the server takes it after NET.limits.playAgainDelay), and again every playAgainRetry until a new life starts. */
+  playAgainDelay: 0.6,
+  playAgainRetry: 1.5,
+  /** Seconds between refreshes of the players online on the title screen. */
+  onlineRefreshSeconds: 10,
+  /** Seconds a note (fallback to the offline arena, refused nickname) stays on screen. */
+  noteSeconds: 6,
+  /** After a reload for a new version, another 'version' refusal within this many seconds plays offline instead (no reload loop). */
+  reloadGuardSeconds: 60,
+  /** Ping colours on screen: good below this many milliseconds, fair below the next, poor above. */
+  pingGood: 100,
+  pingFair: 200,
+} as const;

@@ -6,6 +6,7 @@ import { viewDistance } from '../sim/Hole.ts';
 const tmpRay = new THREE.Vector3();
 const tmpNdc = new THREE.Vector3();
 const tmpGround = new THREE.Vector3();
+const ORIGIN = new THREE.Vector3();
 
 /**
  * Tilted 2.5D follow camera. It frames the local hole at its view distance (from the radius alone, continuous:
@@ -31,6 +32,8 @@ export class GameCamera {
   private readonly focus = new THREE.Vector3();
   private readonly offsetDir: THREE.Vector3;
   private screenHeight = 1;
+  /** A copy of the camera framing a hole at the origin at view distance 1 (see screenReach). */
+  private readonly probe = new THREE.PerspectiveCamera();
 
   constructor(target: THREE.Vector3, radius: number) {
     const tilt = THREE.MathUtils.degToRad(CAMERA.tiltDegrees);
@@ -101,6 +104,34 @@ export class GameCamera {
   }
 
   /**
+   * How far the screen reaches on the play plane, in view distances of the hole: the farthest ground corner from the
+   * hole, framed as it settles (no punch, kick or shake). About 1.3 on a wide screen, more on a portrait phone (the
+   * pull-back). The online arena sends what lies within it.
+   */
+  screenReach(): number {
+    const cam = this.probe;
+    cam.fov = this.camera.fov;
+    cam.aspect = this.camera.aspect;
+    cam.near = 0.01;
+    cam.far = 100;
+    cam.position.copy(this.offsetDir).multiplyScalar(this.aspectScale);
+    cam.lookAt(ORIGIN);
+    cam.updateProjectionMatrix();
+    cam.updateMatrixWorld();
+    let reach = 0;
+    for (const [nx, ny] of [
+      [-1, -1],
+      [1, -1],
+      [-1, 1],
+      [1, 1],
+    ]) {
+      const p = this.ground(nx, ny, cam);
+      reach = Math.max(reach, Math.hypot(p.x, p.z));
+    }
+    return reach;
+  }
+
+  /**
    * What the camera sees on the play plane, into `out`: the trapezoid between where the bottom and the top screen
    * edges meet the plane (grown by `margin`), a circle holding it, and the world size of a CSS pixel at the focus.
    */
@@ -120,9 +151,8 @@ export class GameCamera {
     out.unitsPerPixel = (2 * distance * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) / this.screenHeight;
   }
 
-  /** Where the ray through screen point (nx, ny) (normalised -1..1) meets the play plane. */
-  private ground(nx: number, ny: number): THREE.Vector3 {
-    const cam = this.camera;
+  /** Where the ray through screen point (nx, ny) (normalised -1..1) of `cam` meets the play plane. */
+  private ground(nx: number, ny: number, cam: THREE.PerspectiveCamera = this.camera): THREE.Vector3 {
     tmpNdc.set(nx, ny, 0.5).unproject(cam);
     tmpRay.copy(tmpNdc).sub(cam.position);
     // Every corner ray points down at the plane (the tilt is steeper than half the widest FOV).

@@ -673,6 +673,8 @@ export const STORAGE = {
   settings: 'spaghettify.settings',
   /** Level the auto quality scaler settled on, so the next visit starts there. */
   autoQuality: 'spaghettify.autoQuality',
+  /** Session storage: when the page last reloaded because the server runs a newer version (no reload loops). */
+  versionReload: 'spaghettify.versionReload',
 } as const;
 
 export const MENU = {

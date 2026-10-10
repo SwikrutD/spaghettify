@@ -168,8 +168,13 @@ curl -si -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Vers
   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" https://spaghettify.swikrut.com/ws | head -1   # 101 Switching Protocols
 ```
 
-Open the site, play a run and check Umami's Realtime view shows the visit and a `run-start` event.
-Set a nickname on the title screen and play a run: the score screen shows your rank and the board.
+Open the site: the title says how many players are online (or `SERVER UNREACHABLE: OFFLINE ARENA` when
+`/api/online` does not answer). Press Play: the game joins the online arena and the corner line reads
+`ONLINE` with the players in the room and the round trip in ms. If it cannot join, a note says why and the
+game plays the offline arena with bots (the line reads `OFFLINE ARENA`). Open a second browser (or a phone)
+and play at the same time: both land in the same room. Check Umami's Realtime view shows the visit and a
+`run-start` event. Set a nickname on the title screen and play a life: the score screen shows your rank and
+the board (online the server posts the life itself).
 Open `/?perf` on a phone to see the frame time and the quality level it settles on.
 
 ## Updating

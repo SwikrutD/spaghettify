@@ -20,7 +20,10 @@ export function saveBest(score: number): void {
   }
 }
 
-/** Title screen: name, best score, nickname entry, play and settings. Shown before the first run and after quitting a run. */
+/**
+ * Title screen: name, best score, nickname entry, play, settings and the online status (players online, or the
+ * offline arena). Shown before the first run and after quitting a run.
+ */
 export class TitleScreen {
   onPlay: (() => void) | null = null;
   onSettings: (() => void) | null = null;
@@ -31,6 +34,9 @@ export class TitleScreen {
   private readonly root = overlay('title-screen', 20);
   private readonly best = document.createElement('div');
   private readonly nickname = document.createElement('input');
+  private readonly playButton: HTMLButtonElement;
+  private readonly online = document.createElement('div');
+  private connecting = false;
   private visible = false;
 
   constructor(parent: HTMLElement = document.body) {
@@ -85,12 +91,15 @@ export class TitleScreen {
     const play = button('PLAY', 'play', true);
     play.style.marginTop = '20px';
     play.addEventListener('click', () => this.play());
+    this.playButton = play;
+    Object.assign(this.online.style, { fontSize: '12px', letterSpacing: '0.25em', opacity: '0.7', margin: '10px 0 0', minHeight: '15px' });
+    this.online.dataset.testid = 'title-online';
     const settings = button('SETTINGS', 'title-settings');
     settings.addEventListener('click', () => this.onSettings?.());
 
     this.board.root.style.display = 'none';
     this.board.root.style.margin = '24px auto 0';
-    box.append(title, tag, this.best, this.nickname, play, settings, this.board.root);
+    box.append(title, tag, this.best, this.nickname, play, this.online, settings, this.board.root);
     this.root.append(box);
     parent.append(this.root);
 
@@ -102,6 +111,23 @@ export class TitleScreen {
 
   get nicknameValue(): string {
     return cleanNickname(this.nickname.value);
+  }
+
+  get isVisible(): boolean {
+    return this.visible;
+  }
+
+  /** The line under Play: players online, or that the game plays the offline arena. */
+  setOnline(text: string): void {
+    this.online.textContent = text;
+  }
+
+  /** While joining the online arena Play waits (and says so). */
+  setConnecting(on: boolean): void {
+    this.connecting = on;
+    this.playButton.textContent = on ? 'CONNECTING...' : 'PLAY';
+    this.playButton.disabled = on;
+    this.playButton.style.opacity = on ? '0.6' : '1';
   }
 
   show(): void {
@@ -118,7 +144,7 @@ export class TitleScreen {
   }
 
   private play(): void {
-    if (!this.visible) return;
+    if (!this.visible || this.connecting) return;
     this.saveNickname();
     this.onPlay?.();
   }

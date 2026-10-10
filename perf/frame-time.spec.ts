@@ -32,7 +32,7 @@ const VARIANTS: Record<string, string> = {
 };
 
 async function measure(page: Page, setup: string): Promise<Record<string, number>> {
-  await page.goto('/');
+  await page.goto('/?offline');
   await page.waitForFunction(() => (window as unknown as { __spaghettify?: { frames: number } }).__spaghettify?.frames ?? 0 > 10);
   await page.getByTestId('play').dispatchEvent('click');
   return page.evaluate(async (setup) => {

@@ -218,14 +218,16 @@ test('the player swallows a smaller hole: its mass transfers on the hole curve, 
     local.protection = 0;
     const prey = d.bots[0];
     prey.hunger.enabled = false;
-    // The prey holds still (no brain); the others are far away. The player is clearly bigger and covers its centre.
+    // The prey holds still (no brain); the others (every bot left: the prey is no longer one) are far away, and
+    // nothing else is near to eat. The player is clearly bigger and covers its centre.
     prey.bot = null;
-    for (const b of d.bots.slice(1)) {
+    for (const b of d.bots) {
       b.position.x = 5000;
       b.position.z = 5000;
     }
     d.player.mass = 400;
     d.player.setRadius(local.radiusForMass());
+    d.prey.clear();
     prey.mass = 100;
     prey.radius = prey.radiusForMass();
     prey.position.x = local.position.x + local.radius * 0.4;

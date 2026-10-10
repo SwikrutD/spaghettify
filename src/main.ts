@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { BOTS, DANGER, HOLES, JUICE, LIGHTING, MILESTONE_FX, MILESTONES, QUALITY, RENDER } from './config';
+import { BOTS, DANGER, HOLES, JUICE, LIGHTING, MILESTONE_FX, MILESTONES, NET_CLIENT, QUALITY, RENDER, STORAGE } from './config';
 import { initAnalytics, scoreBand, track } from './analytics/analytics';
 import { AudioEngine } from './audio/AudioEngine';
 import { objectView, poolView } from './debug/debugViews';
@@ -15,8 +15,13 @@ import { GamepadInput } from './input/GamepadInput';
 import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
 import { TouchInput } from './input/TouchInput';
+import { fetchOnline } from './leaderboard/api';
+import type { FieldSight } from './net/ArenaMirror.ts';
+import { arenaUrl, NetClient, type NetEnd } from './net/NetClient';
+import { OnlineArena } from './net/OnlineArena.ts';
 import { blink } from './player/HoleMesh';
 import { HoleMeshes } from './player/HoleMeshes';
+import type { OverMessage, WelcomeMessage } from './protocol/messages.ts';
 import { AutoQuality } from './render/AutoQuality';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
@@ -28,14 +33,15 @@ import { cardBlob, cardFileName, renderShareCard, shareText } from './share/shar
 import { isTouchFirst, Settings } from './settings/Settings';
 import { canSwallow } from './sim/body.ts';
 import type { AteEvent, DiedEvent, HoleEatenEvent } from './sim/events.ts';
-import { viewDistance, type Meal } from './sim/Hole.ts';
+import { viewDistance, type Hole, type Meal } from './sim/Hole.ts';
 import { generateName } from './sim/names.ts';
 import { classNamed, MILESTONE_MASSES } from './sim/milestones.ts';
 import { World } from './sim/World.ts';
 import { Hud } from './ui/Hud';
 import { HungerOverlay } from './ui/HungerOverlay';
-import { postRunToBoard, refreshTitleBoard } from './ui/leaderboardFlow';
+import { postRunToBoard, refreshTitleBoard, showServerLife } from './ui/leaderboardFlow';
 import { NameTags } from './ui/NameTags';
+import { NetStatus } from './ui/NetStatus';
 import { PauseMenu } from './ui/PauseMenu';
 import { PerfOverlay } from './ui/PerfOverlay';
 import { ScoreScreen, type RunStats } from './ui/ScoreScreen';
@@ -47,15 +53,21 @@ import { loadBest, saveBest, TitleScreen } from './ui/TitleScreen';
 initAnalytics();
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
-// The game state and rules (src/sim): one offline arena with bot holes. The local player is the world's focus hole,
-// steered by the input vector. `?seed=` fixes the arena, `?bots=` sets the number of bots (the tests use 0).
+// The game state and rules (src/sim). Play joins the online arena on the server when it can (src/net: the client's
+// mirror of a server room) and otherwise plays the offline arena with bot holes, where the local player is the
+// world's focus hole, steered by the input vector. `?seed=` fixes the offline arena and `?bots=` sets its number of
+// bots (the tests use 0); either, or `?offline`, plays offline without trying the server.
 const params = new URLSearchParams(location.search);
 const botParam = Number(params.get('bots'));
-const world = new World({
+const offlineOnly = params.has('offline') || params.has('bots') || params.has('seed');
+const offlineWorld = new World({
   seed: params.has('seed') ? Number(params.get('seed')) >>> 0 : (Math.random() * 2 ** 32) >>> 0,
   bots: params.has('bots') && Number.isFinite(botParam) ? Math.max(0, Math.min(40, Math.round(botParam))) : BOTS.count,
 });
-const local = world.focus;
+/** The world drawn and played: the offline arena, or online the mirror of the server's room. */
+let world: World = offlineWorld;
+/** The player's hole in it. */
+let local: Hole = offlineWorld.focus;
 // A name for the player until they type one.
 const fallbackName = generateName(world.rng, (n) => world.holes.some((h) => h.name === n));
 local.name = fallbackName;
@@ -65,9 +77,9 @@ const scene = new THREE.Scene();
 const holeMeshes = new HoleMeshes();
 const holeMesh = holeMeshes.local;
 const ripple = new MergerRipple();
-const preyMesh = new PreyFieldMesh(world.prey, world.field);
-const cometMesh = new CometFieldMesh(world.comets);
-const debrisMesh = new DebrisMesh(world.debris);
+const preyMesh = new PreyFieldMesh(world.prey.objects.length);
+const cometMesh = new CometFieldMesh();
+const debrisMesh = new DebrisMesh();
 const shedBurst = new ShedBurst();
 const starfield = createStarfield();
 const arenaWall = new ArenaWall();
@@ -85,7 +97,15 @@ scene.add(
   new THREE.AmbientLight(0xffffff, LIGHTING.ambient),
   keyLight,
 );
-const bodyFrame: BodyFrame = { world, alpha: 1, dt: 0, time: 0, holes: holeMeshes.drawn, view: { x: 0, z: 0, radius: 1, unitsPerPixel: 1, nearZ: 1, farZ: -1, nearHalf: 1, farHalf: 1 } };
+const bodyFrame: BodyFrame = {
+  world,
+  sight: null,
+  alpha: 1,
+  dt: 0,
+  time: 0,
+  holes: holeMeshes.drawn,
+  view: { x: 0, z: 0, radius: 1, unitsPerPixel: 1, nearZ: 1, farZ: -1, nearHalf: 1, farHalf: 1 },
+};
 const gameCamera = new GameCamera(holeMesh.position, local.radius);
 const setPiece = new MilestoneSetPiece();
 
@@ -97,8 +117,24 @@ const hungerOverlay = new HungerOverlay();
 const scoreScreen = new ScoreScreen();
 const hud = new Hud();
 const nameTags = new NameTags();
+// `?perf` in the URL shows frame time, GPU time per pass (where the browser allows it) and the quality level; the
+// connection line moves down out of its way.
+const perfOn = params.has('perf');
+const netStatus = new NetStatus(document.body, perfOn ? 96 : 12);
 /** 0..1 flash when the local hole eats a hole or is eaten; decays on real time. */
 let mergerFlash = 0;
+
+// Online play (null while offline): the connection and the client's side of the room.
+let net: NetClient | null = null;
+let online: OnlineArena | null = null;
+/** Joining right now (the title waits). */
+let joining = false;
+/** The last online session dropped: Play again tries to join again (otherwise it plays on offline). */
+let rejoin = false;
+/** The window lost focus or the tab is hidden: online the hole is not steered (nothing pauses there). */
+let away = false;
+/** Why the last online session ended without the player leaving (debug and tests). */
+let lastEnd: NetEnd | null = null;
 
 /** The local hole ate: the disk heats; a new biggest meal is the share card's photo; the camera kicks (and shakes for big ones). */
 function onAte(e: AteEvent): void {
@@ -137,7 +173,7 @@ function onHoleEaten(e: HoleEatenEvent): void {
   if (mine) mergerFlash = 1;
 }
 
-/** React to what the world did since the last frame. */
+/** React to what the world did since the last frame (online: what the snapshots said, as it is drawn). */
 function handleEvents(): void {
   for (const e of world.events) {
     switch (e.type) {
@@ -165,42 +201,74 @@ function handleEvents(): void {
         onHoleEaten(e);
         break;
       case 'died':
-        if (e.hole === local.id) endRun(e);
+        // Online the score screen waits for the server's account of the life ('over').
+        if (e.hole === local.id && !online) endRun(e);
         break;
     }
   }
   world.clearEvents();
 }
 
-// Life over: score = peak mass gained (scaled to points), shown with the biggest meal and the size reached.
+// Life over (offline): score = peak mass gained (scaled to points), shown with the biggest meal and the size reached.
 function endRun(died: DiedEvent): void {
   const score = local.score;
-  const previous = loadBest();
-  const newBest = score > previous;
-  if (newBest) saveBest(score);
-  const stats: RunStats = {
-    score,
-    best: Math.max(score, previous),
-    newBest,
-    biggest: local.biggestEaten,
-    milestoneNumber: local.milestone + 1,
-    milestoneTitle: MILESTONES[local.milestone].title,
-    eatenCount: local.eatenCount,
-    holesEaten: local.holesEaten,
-    eatenBy: died.cause === 'eaten' ? died.byName : null,
-    seconds: local.hunger.runTime,
-  };
-  scoreScreen.show(stats);
-  prepareShare(stats);
+  const stats = runStats(score, local.biggestEaten, local.milestone, local.eatenCount, local.holesEaten, died.cause === 'eaten' ? died.byName : null, local.hunger.runTime);
+  showScore(stats);
   void postRunToBoard(scoreScreen.board, stats, title.nicknameValue);
   track('run-end', {
     band: scoreBand(score),
     tier: local.milestone + 1,
     seconds: Math.round(local.hunger.runTime),
     eaten: local.eatenCount,
-    newBest,
+    newBest: stats.newBest,
     cause: died.cause,
+    online: false,
   });
+}
+
+// Life over (online): the server scored it, and posted it when the player has a nickname. Never posted from here.
+function endOnlineLife(over: OverMessage): void {
+  if (!online) return;
+  const milestone = Math.max(0, Math.min(MILESTONES.length - 1, over.milestone - 1));
+  const stats = runStats(over.score, over.biggest, milestone, over.eaten, over.holesEaten, over.cause === 'eaten' ? over.byName : null, over.seconds);
+  showScore(stats);
+  const { name, named, refused } = online.welcome;
+  void showServerLife(scoreScreen.board, stats, over.posted, name, named, refused);
+  track('run-end', {
+    band: scoreBand(over.score),
+    tier: over.milestone,
+    seconds: Math.round(over.seconds),
+    eaten: over.eaten,
+    newBest: stats.newBest,
+    cause: over.cause,
+    online: true,
+  });
+}
+
+/** A life's stats for the score screen; keeps the best score on this device. */
+function runStats(score: number, biggest: Meal | null, milestone: number, eaten: number, holesEaten: number, eatenBy: string | null, seconds: number): RunStats {
+  const previous = loadBest();
+  const newBest = score > previous;
+  if (newBest) saveBest(score);
+  return {
+    score,
+    best: Math.max(score, previous),
+    newBest,
+    biggest,
+    milestoneNumber: milestone + 1,
+    milestoneTitle: MILESTONES[milestone].title,
+    eatenCount: eaten,
+    holesEaten,
+    eatenBy,
+    seconds,
+  };
+}
+
+function showScore(stats: RunStats): void {
+  // Online the menu may be open over the running arena when the life ends.
+  if (mode === 'paused') setMode('playing');
+  scoreScreen.show(stats);
+  prepareShare(stats);
   refreshMenus();
 }
 
@@ -234,7 +302,7 @@ scoreScreen.onShare = async () => {
   }
 };
 
-/** Steps not yet run: real seconds carried over to the next frame. */
+/** Steps not yet run in the offline arena: real seconds carried over to the next frame. */
 let pending = 0;
 
 /** Draw the world as of `alpha` (0..1) between its last two steps. `dt` is seconds since the last frame. */
@@ -245,7 +313,7 @@ function renderWorld(dt: number, alpha: number): void {
   // What the camera sees (as of the last frame's placement; it moves little in one frame), with a margin for
   // bodies whose centre is just off screen.
   gameCamera.groundView(bodyFrame.view, gameCamera.distance * 0.1);
-  holeMeshes.update(dt, alpha, world, bodyFrame.view, gameCamera.camera);
+  holeMeshes.update(dt, alpha, world, local, bodyFrame.view, gameCamera.camera);
   renderer.lensing.extras = holeMeshes.lensExtras;
   ripple.update(dt);
   preyMesh.update(bodyFrame);
@@ -256,7 +324,7 @@ function renderWorld(dt: number, alpha: number): void {
 
 // A fresh life for the local hole (the camera and everything drawn from it start over; the effects are cleared).
 function restartDrawing(): void {
-  holeMeshes.reset(world);
+  holeMeshes.reset(local);
   gameCamera.reset(holeMesh.position, local.radius);
   shedBurst.reset();
   ripple.reset();
@@ -269,7 +337,7 @@ function restartDrawing(): void {
   renderWorld(0, 1);
 }
 
-// A fresh arena (hole, bots, field, bodies, comets, debris), for quitting to the title screen.
+// A fresh offline arena (hole, bots, field, bodies, comets, debris), for quitting to the title screen.
 function resetRun(): void {
   world.reset();
   local.name = nameForRun();
@@ -278,7 +346,7 @@ function resetRun(): void {
   restartDrawing();
 }
 
-// Play again after a life: the hole respawns in the arena as it runs, at a clear spawn point.
+// Play again after an offline life: the hole respawns in the arena as it runs, at a clear spawn point.
 function respawnLocal(): void {
   world.respawn(local);
   local.name = nameForRun();
@@ -288,6 +356,16 @@ function respawnLocal(): void {
 /** The nickname from the title screen, or the generated one. */
 function nameForRun(): string {
   return title.nicknameValue || fallbackName;
+}
+
+/** Draw and play `next` from now on (the offline arena, or an online room's mirror). */
+function useWorld(next: World, nextLocal: Hole, sight: FieldSight | null): void {
+  world = next;
+  local = nextLocal;
+  bodyFrame.world = next;
+  bodyFrame.sight = sight;
+  holeMesh.drawOffset.x = holeMesh.drawOffset.z = 0;
+  pauseMenu.setOnline(online !== null);
 }
 
 const renderer = new Renderer(canvas, scene, gameCamera.camera, holeMesh);
@@ -300,7 +378,8 @@ const input = new InputManager([
   { id: 'mouse', source: new MouseInput(canvas) },
 ]);
 
-// Menus and run state. The run does not advance in 'title' or 'paused'; the scene keeps rendering behind the menus.
+// Menus and run state. Offline the run does not advance in 'title' or 'paused'; the scene keeps rendering behind the
+// menus. Online 'paused' is the menu over the arena, which runs on.
 type Mode = 'title' | 'playing' | 'paused';
 let mode: Mode = 'title';
 const title = new TitleScreen();
@@ -347,6 +426,7 @@ function refreshMenus(): void {
 function setMode(next: Mode): void {
   mode = next;
   if (next !== 'playing') touch.release();
+  netStatus.setVisible(next !== 'title');
   refreshMenus();
 }
 function pause(): void {
@@ -364,13 +444,182 @@ function closeSettings(): void {
   if (settingsReturn === 'title') title.show();
 }
 
+/** Play the offline arena: from the title (a fresh life there) or after a life (respawn). `note` says why it is offline. */
+function playOffline(from: 'title' | 'restart', note: string | null): void {
+  if (from === 'title') {
+    local.name = nameForRun();
+    title.hide();
+    setMode('playing');
+  } else {
+    respawnLocal();
+    refreshMenus();
+  }
+  if (note) netStatus.showNote(note);
+  track('run-start', { from, online: false });
+}
+
+/** What the player is told when the online arena could not be joined (the game plays offline instead). */
+function joinFailedNote(why: NetEnd): string {
+  switch (why) {
+    case 'full':
+      return 'The online arena is full right now. Playing the offline arena with bots.';
+    case 'version':
+      return 'A new version of the game is out. Reload the page to play online.';
+    case 'unreachable':
+      return 'Could not reach the server. Playing the offline arena with bots.';
+    default:
+      return 'Could not join the online arena. Playing the offline arena with bots.';
+  }
+}
+
+/**
+ * The server runs a newer build than this page (a 'version' refusal): reload to get it, unless the page reloaded for
+ * that a moment ago (then it plays offline instead of reloading in a loop). True if it reloads.
+ */
+function reloadForNewVersion(): boolean {
+  try {
+    const last = Number(sessionStorage.getItem(STORAGE.versionReload));
+    if (last && Date.now() - last < NET_CLIENT.reloadGuardSeconds * 1000) return false;
+    sessionStorage.setItem(STORAGE.versionReload, String(Date.now()));
+  } catch {
+    return false;
+  }
+  location.reload();
+  return true;
+}
+
+/** Join quick play on the server; play offline (saying why) if it cannot. */
+async function joinOnline(from: 'title' | 'restart'): Promise<void> {
+  if (joining) return;
+  joining = true;
+  title.setConnecting(true);
+  // Only a nickname the player typed goes to the server (it makes up a name otherwise, and does not post that one).
+  const result = await NetClient.connect(arenaUrl(), title.nicknameValue, gameCamera.screenReach());
+  joining = false;
+  title.setConnecting(false);
+  if ('failed' in result) {
+    if (result.failed === 'version' && reloadForNewVersion()) return;
+    playOffline(from, joinFailedNote(result.failed));
+    return;
+  }
+  startOnline(result.client, result.welcome, from);
+}
+
+/** Welcomed into a room: follow it, and start playing once the first snapshot has placed the hole. */
+function startOnline(client: NetClient, welcome: WelcomeMessage, from: 'title' | 'restart'): void {
+  net = client;
+  rejoin = false;
+  const arena = new OnlineArena(welcome, client, gameCamera.screenReach());
+  online = arena;
+  let entered = false;
+  arena.onBoard = (board) => hud.setBoard(board.rows, board.you, arena.local);
+  arena.onOver = (over) => endOnlineLife(over);
+  arena.onNewLife = () => {
+    if (!entered) {
+      // Into the room's world: the title (or the last score screen) gives way.
+      entered = true;
+      useWorld(arena.world, arena.local, arena.mirror.sight);
+      hud.clearFeed();
+      title.hide();
+      scoreScreen.hide();
+      setMode('playing');
+      if (welcome.refused) netStatus.showNote(`That nickname is not allowed here. You play as ${welcome.name}.`);
+      track('run-start', { from, online: true });
+    } else {
+      track('run-start', { from: 'restart', online: true });
+    }
+    restartDrawing();
+    refreshMenus();
+  };
+  client.listen((message, at) => arena.receive(message, at));
+  client.onEnd = (why) => onlineEnded(arena, why);
+}
+
+/** Leave the online arena (the server scores a life still going) and go back to the offline world. */
+function leaveOnline(): void {
+  net?.close();
+  net = null;
+  online = null;
+  useWorld(offlineWorld, offlineWorld.focus, null);
+}
+
+/**
+ * The connection ended without the player leaving. A life in play carries on in the offline arena (a fresh one, the
+ * hole at its size and with its life so far); a life that was over stays on its score screen and Play again tries
+ * to join again. The server scored the online part of the life either way.
+ */
+function onlineEnded(arena: OnlineArena, why: NetEnd): void {
+  if (online !== arena) return;
+  lastEnd = why;
+  const hole = arena.local;
+  const entered = world === arena.world;
+  net = null;
+  online = null;
+  if (why === 'version' && reloadForNewVersion()) return;
+  if (!entered) {
+    // Welcomed, then dropped before the first snapshot: as if the join failed.
+    playOffline(title.isVisible ? 'title' : 'restart', joinFailedNote(why));
+    return;
+  }
+  rejoin = !offlineOnly;
+  const live = hole.phase === 'playing' || hole.phase === 'evaporating';
+  useWorld(offlineWorld, offlineWorld.focus, null);
+  world.reset();
+  pending = 0;
+  hud.clearFeed();
+  if (live) {
+    carryOver(hole);
+    netStatus.showNote(
+      why === 'shutdown'
+        ? 'The server is restarting. Your hole carries on in the offline arena.'
+        : 'Lost the connection to the server. Your hole carries on in the offline arena.',
+    );
+    track('net-drop', { why, carried: true });
+  } else {
+    // The life ended (or was ending) online: the offline arena waits behind the score screen for Play again.
+    local.name = nameForRun();
+    local.hunger.phase = 'over';
+    restartDrawing();
+    netStatus.showNote('Lost the connection to the server.');
+    track('net-drop', { why, carried: false });
+    // Play again was already pressed: join again (or play offline). No account of the life came: show what was seen.
+    if (arena.awaitingLife) void joinOnline('restart');
+    else if (!arena.over) endDroppedLife(hole);
+  }
+  refreshMenus();
+}
+
+/** The offline arena takes over a life from the online one: the hole at a clear spot for its size, its life so far kept. */
+function carryOver(from: Hole): void {
+  world.respawn(local, from.radius);
+  local.name = from.name;
+  local.mass = from.mass;
+  local.peakMass = Math.max(from.peakMass, from.mass);
+  local.eatenMass = from.eatenMass;
+  local.eatenCount = from.eatenCount;
+  local.biggestEaten = from.biggestEaten;
+  local.holesEaten = from.holesEaten;
+  local.milestone = Math.max(local.milestone, from.milestone);
+  local.hunger.runTime = from.hunger.runTime;
+  restartDrawing();
+}
+
+/** Swallowed online as the connection dropped (the server's account never came): the score screen from what this client saw. */
+function endDroppedLife(hole: Hole): void {
+  const stats = runStats(hole.score, hole.biggestEaten, hole.milestone, hole.eatenCount, hole.holesEaten, hole.eatenByName || null, hole.hunger.runTime);
+  showScore(stats);
+  scoreScreen.board.clear();
+  scoreScreen.board.setStatus('The connection dropped. The server scored this life as it stood.');
+}
+
 title.onPlay = () => {
-  local.name = nameForRun();
-  title.hide();
-  setMode('playing');
-  track('run-start', { from: 'title' });
+  if (offlineOnly) playOffline('title', null);
+  else void joinOnline('title');
 };
-title.onShow = () => void refreshTitleBoard(title.board, title.nicknameValue);
+title.onShow = () => {
+  void refreshTitleBoard(title.board, title.nicknameValue);
+  void refreshOnline();
+};
 title.onSettings = () => {
   title.hide();
   openSettings('title');
@@ -379,16 +628,38 @@ pauseMenu.onResume = resume;
 pauseMenu.onPauseRequest = pause;
 pauseMenu.onSettings = () => openSettings('pause');
 pauseMenu.onQuit = () => {
+  if (online) leaveOnline();
   resetRun();
   setMode('title');
   title.show();
 };
 settingsPanel.onClose = closeSettings;
 scoreScreen.onRestart = () => {
-  respawnLocal();
-  refreshMenus();
-  track('run-start', { from: 'restart' });
+  if (online) {
+    // A new life in the room once the server takes it; drawing starts afresh when it comes (onNewLife).
+    online.playAgain();
+  } else if (rejoin) {
+    void joinOnline('restart');
+  } else {
+    respawnLocal();
+    refreshMenus();
+    track('run-start', { from: 'restart', online: false });
+  }
 };
+
+/** Players online, on the title screen; or that the game plays offline. */
+async function refreshOnline(): Promise<void> {
+  if (offlineOnly) {
+    title.setOnline('OFFLINE ARENA');
+    return;
+  }
+  const info = await fetchOnline();
+  if (!info) title.setOnline('SERVER UNREACHABLE: OFFLINE ARENA');
+  else title.setOnline(`${info.players} ${info.players === 1 ? 'PLAYER' : 'PLAYERS'} ONLINE`);
+}
+window.setInterval(() => {
+  if (title.isVisible) void refreshOnline();
+}, NET_CLIENT.onlineRefreshSeconds * 1000);
 
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
@@ -400,10 +671,19 @@ window.addEventListener('keydown', (e) => {
     audio.toggleMute();
   }
 });
-// Losing focus or hiding the tab pauses a live run.
-window.addEventListener('blur', pause);
+// Losing focus or hiding the tab pauses a live offline run; online the hole stops being steered (the arena runs on).
+window.addEventListener('blur', () => {
+  away = true;
+  if (!online) pause();
+});
+window.addEventListener('focus', () => {
+  away = false;
+});
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) pause();
+  away = document.hidden;
+  if (!document.hidden) return;
+  if (online) online.halt();
+  else pause();
 });
 title.show();
 
@@ -414,6 +694,7 @@ function resize(): void {
   holeMeshes.turbulence.setRenderHeight(renderer.bufferHeight);
   gameCamera.resize(w, h);
   shedBurst.setViewport(renderer.bufferHeight, gameCamera.camera.fov);
+  online?.setReach(gameCamera.screenReach());
 }
 window.addEventListener('resize', resize);
 resize();
@@ -422,11 +703,15 @@ renderWorld(0, 1);
 // Debug handle used by the Playwright smoke test and the console. Sim objects are shown through views whose
 // {x, z} vectors behave like THREE.Vector3 (see debugViews); writes go straight into the sim.
 const pixelReads: { x: number; y: number; resolve: (rgb: number[]) => void }[] = [];
+let playerView: { hole: Hole; view: Hole } | null = null;
 const debug = {
   frames: 0,
   /** Smoothed CPU milliseconds per frame (simulation steps, drawing and issuing the draw calls). */
   cpuMs: 0,
-  world,
+  /** The world played and drawn (offline, or the online room's mirror). */
+  get world() {
+    return world;
+  },
   holes: holeMeshes,
   hud,
   nameTags,
@@ -435,18 +720,48 @@ const debug = {
   get bots() {
     return world.holes.filter((h) => h.bot);
   },
-  player: objectView(local, {
-    disk: holeMesh.disk,
-    group: holeMesh.group,
-    setRadius(r: number) {
-      local.radius = local.prevRadius = r;
+  /** The local player's hole, with a few helpers. */
+  get player() {
+    if (playerView?.hole !== local) {
+      const hole = local;
+      const view = objectView(hole, {
+        disk: holeMesh.disk,
+        group: holeMesh.group,
+        setRadius(r: number) {
+          hole.radius = hole.prevRadius = r;
+        },
+        /** Credit a meal straight away, with all its feedback (the event is handled at once). */
+        eat(mass: number, what?: Meal) {
+          world.eat(hole, mass, what ?? null);
+          handleEvents();
+        },
+      });
+      playerView = { hole, view };
+    }
+    return playerView.view;
+  },
+  /** Online play: the connection and the client's side of the room (null fields while offline). */
+  net: {
+    get state(): 'offline' | 'joining' | 'online' {
+      return online ? 'online' : joining ? 'joining' : 'offline';
     },
-    /** Credit a meal straight away, with all its feedback (the event is handled at once). */
-    eat(mass: number, what?: Meal) {
-      world.eat(local, mass, what ?? null);
-      handleEvents();
+    get arena() {
+      return online;
     },
-  }),
+    get rtt() {
+      return net?.rtt ?? null;
+    },
+    get offlineWorld() {
+      return offlineWorld;
+    },
+    get note() {
+      return netStatus.noteText;
+    },
+    /** Why the last session ended without the player leaving. */
+    get lastEnd() {
+      return lastEnd;
+    },
+  },
   /** The arena's bodies (dwarf planets and up) and helpers around them and the small-matter field. */
   prey: {
     get objects() {
@@ -486,7 +801,9 @@ const debug = {
       world.field.clearAround(local.position.x, local.position.z, gameCamera.targetDistance * 4);
     },
   },
-  field: world.field,
+  get field() {
+    return world.field;
+  },
   comets: {
     get objects() {
       return poolView(world.comets.objects);
@@ -570,14 +887,21 @@ const debug = {
 };
 (window as unknown as { __spaghettify: typeof debug }).__spaghettify = debug;
 
-// `?perf` in the URL shows frame time, GPU time per pass (where the browser allows it) and the quality level.
-const perfOverlay = new URLSearchParams(location.search).has('perf') ? new PerfOverlay(renderer, () => qualityLevel()) : null;
+const perfOverlay = perfOn ? new PerfOverlay(renderer, () => qualityLevel()) : null;
 
 /** Names over the holes in view, and the HUD only while there is a run to show (not on the title screen or the score screen). */
 function updateTags(): void {
   const showing = mode !== 'title' && local.phase !== 'over';
   hud.setVisible(showing);
   nameTags.setVisible(showing);
+  if (online) {
+    const board = online.board;
+    netStatus.online(board ? board.players : null, net?.rtt ?? null);
+  } else if (joining) {
+    netStatus.connecting();
+  } else {
+    netStatus.offline();
+  }
   if (!showing) return;
   nameTags.begin();
   for (const hole of world.holes) {
@@ -605,23 +929,37 @@ function frame(now: number): void {
   last = now;
   autoQuality.frame(frameMs);
   perfOverlay?.frame(frameMs, debug.cpuMs);
-  if (mode !== 'playing') {
+  // Online the room runs on whatever the player does (the menu is open, the title waits for the first snapshot).
+  if (online) {
+    input.update();
+    const steer = mode === 'playing' && !away && world === online.world;
+    online.update(Math.max(0, frameMs) / 1000, steer ? input.move.x : 0, steer ? -input.move.y : 0, performance.now());
+    holeMesh.drawOffset.x = online.drawOffset.x;
+    holeMesh.drawOffset.z = online.drawOffset.z;
+  }
+  const live = online ? world === online.world && mode !== 'title' : mode === 'playing';
+  if (!live) {
     drawFrame(start);
     return;
   }
-  input.update();
-  // Screen up is -Z on the play plane. The sim ignores input once the hole is out of play.
-  local.input.x = input.move.x;
-  local.input.z = -input.move.y;
-  setPiece.update(realDt);
-  // Fixed steps of real time; whatever is left over carries to the next frame and the drawing interpolates into it.
-  pending += realDt;
-  while (pending >= world.dt) {
-    world.step();
-    pending -= world.dt;
+  let alpha: number;
+  if (online) {
+    alpha = online.alpha;
+  } else {
+    input.update();
+    // Screen up is -Z on the play plane. The sim ignores input once the hole is out of play.
+    local.input.x = input.move.x;
+    local.input.z = -input.move.y;
+    // Fixed steps of real time; whatever is left over carries to the next frame and the drawing interpolates into it.
+    pending += realDt;
+    while (pending >= world.dt) {
+      world.step();
+      pending -= world.dt;
+    }
+    alpha = pending / world.dt;
   }
+  setPiece.update(realDt);
   handleEvents();
-  const alpha = pending / world.dt;
   snapshot.update(realDt);
   // A run with no photo yet gets one as the hole starts to evaporate.
   if (local.phase === 'evaporating') snapshot.ensure();
@@ -636,7 +974,8 @@ function frame(now: number): void {
   starfield.update(holeMesh.position, gameCamera.viewScale);
   mergerFlash *= Math.exp(-realDt / 0.25);
   banner.update(Math.max(setPiece.flash, (mergerFlash * HOLES.mergerFlash) / MILESTONE_FX.flashPeak));
-  hud.update(realDt, world.holes, local);
+  // Offline the board is worked out from the holes; online it comes from the server (Hud.setBoard).
+  if (!online) hud.update(realDt, world.holes, local);
   updateTags();
   drawFrame(start);
 }

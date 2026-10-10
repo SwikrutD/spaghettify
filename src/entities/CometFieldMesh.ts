@@ -1,6 +1,5 @@
 import * as THREE from 'three';
 import { COMETS, SPAGHETTI } from '../config';
-import type { CometField } from '../sim/CometField.ts';
 import { viewDistance } from '../sim/Hole.ts';
 import { lerp } from '../sim/math.ts';
 import { hash01 } from '../sim/rng.ts';
@@ -30,10 +29,8 @@ export class CometFieldMesh {
   private readonly timeUniform = { value: 0 };
   /** Comet generation each tail's streak seed was set for. */
   private readonly gens = new Float64Array(COMETS.poolSize).fill(-1);
-  private readonly field: CometField;
 
-  constructor(field: CometField) {
-    this.field = field;
+  constructor() {
     // Unit quad on the play plane: x in -1..1 (negative is the coma ahead of the nucleus), z in -1..1.
     const geometry = new THREE.PlaneGeometry(2, 2, 8, 2);
     geometry.rotateX(-Math.PI / 2);
@@ -73,7 +70,7 @@ export class CometFieldMesh {
   update(frame: BodyFrame): void {
     this.timeUniform.value += frame.dt;
     this.nuclei.begin();
-    const objects = this.field.objects;
+    const objects = frame.world.comets.objects;
     for (let i = 0; i < objects.length; i++) {
       const comet = objects[i];
       if (!comet.active) {

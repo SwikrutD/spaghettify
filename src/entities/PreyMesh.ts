@@ -5,11 +5,15 @@ import { canSwallow, sizeWeight, type Body } from '../sim/body.ts';
 import { lerp, smooth, smoothstep } from '../sim/math.ts';
 import { hash01 } from '../sim/rng.ts';
 import type { World } from '../sim/World.ts';
+import type { FieldSight } from '../net/ArenaMirror.ts';
 import { createPreyMaterial } from './preyMaterial';
 
 /** What the body renderers need for one frame. */
 export interface BodyFrame {
-  readonly world: World;
+  /** The world drawn: the offline arena, or online the client's mirror of the room. */
+  world: World;
+  /** Which field layers and cells may be drawn (online: only what the server keeps in sync), or null for all. */
+  sight: FieldSight | null;
   /** 0..1: how far this frame is between the last two simulation steps. */
   alpha: number;
   /** Game seconds since the last frame, and since the renderers started (spin and tail animation). */

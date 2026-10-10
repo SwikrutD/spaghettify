@@ -8,23 +8,30 @@ export default tseslint.config(
   ...tseslint.configs.recommended,
   {
     files: ['src/**/*.ts'],
-    ignores: ['src/sim/**', 'src/protocol/**'],
+    ignores: ['src/sim/**', 'src/protocol/**', 'src/net/**'],
     languageOptions: { globals: globals.browser },
   },
   {
-    // The shared simulation and the online protocol run in the browser and on the server: no three.js, no browser
-    // APIs, and every random choice from the world's seeded Rng so the simulation stays deterministic.
-    files: ['src/sim/**/*.ts', 'src/protocol/**/*.ts'],
+    // The socket is the browser side of the online client; the rest of src/net is pure (the server tests run it).
+    files: ['src/net/NetClient.ts'],
+    languageOptions: { globals: globals.browser },
+  },
+  {
+    // The shared simulation, the online protocol and the client's netcode run in the browser and on the server (the
+    // netcode in its tests): no three.js, no browser APIs, and every random choice from the world's seeded Rng so the
+    // simulation stays deterministic.
+    files: ['src/sim/**/*.ts', 'src/protocol/**/*.ts', 'src/net/**/*.ts'],
+    ignores: ['src/net/NetClient.ts'],
     rules: {
       'no-restricted-imports': [
         'error',
-        { patterns: [{ group: ['three', 'three/*', '*.glsl'], message: 'src/sim and src/protocol must not depend on rendering (the server runs them).' }] },
+        { patterns: [{ group: ['three', 'three/*', '*.glsl'], message: 'src/sim, src/protocol and src/net must not depend on rendering (the server runs them).' }] },
       ],
       'no-restricted-globals': [
         'error',
         ...['window', 'document', 'navigator', 'localStorage', 'sessionStorage', 'performance', 'requestAnimationFrame'].map((name) => ({
           name,
-          message: 'src/sim and src/protocol must not use browser APIs (the server runs them).',
+          message: 'src/sim, src/protocol and src/net must not use browser APIs (the server runs them).',
         })),
       ],
       'no-restricted-properties': [

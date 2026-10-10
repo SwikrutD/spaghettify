@@ -59,6 +59,12 @@ export async function fetchTop(limit: number = LEADERBOARD.topLimit): Promise<To
   return isTopList(body) ? body : null;
 }
 
+/** Players in the online arena right now and rooms open, or null when the server does not answer. */
+export async function fetchOnline(): Promise<{ players: number; rooms: number } | null> {
+  const body = await json<{ players: number; rooms: number }>(await request('/online'));
+  return body && typeof body.players === 'number' && typeof body.rooms === 'number' ? body : null;
+}
+
 /** Where a score would place, for a run without a nickname. */
 export async function fetchRank(score: number): Promise<{ rank: number; total: number } | null> {
   const res = await request(`/scores/rank?score=${Math.max(0, Math.round(score))}`);

@@ -40,6 +40,8 @@ export class HoleMesh {
   lensed = true;
   /** The hole's life this mesh last drew, to notice a respawn. */
   gen = -1;
+  /** Added to where the hole is drawn: online, the own hole's correction while it fades out (see src/net/Prediction). */
+  readonly drawOffset = { x: 0, z: 0 };
   /** Seconds left of a hit's squash. */
   private squashLeft = 0;
 
@@ -94,7 +96,7 @@ export class HoleMesh {
       angle = Math.atan2(-(eater.z - z), eater.x - x);
       radius *= 1 - smoothstep(0.4, 1, t);
     }
-    this.position.set(x, 0, z);
+    this.position.set(x + this.drawOffset.x, 0, z + this.drawOffset.z);
     this.radius = radius;
     this.squashLeft = Math.max(0, this.squashLeft - dt);
     this.applyScale(radius, stretch, angle);

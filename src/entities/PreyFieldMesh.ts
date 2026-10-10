@@ -1,8 +1,7 @@
 import * as THREE from 'three';
 import { PREY } from '../config';
 import { createBody, type Body } from '../sim/body.ts';
-import type { Grain, GrainVisitor, MatterField } from '../sim/MatterField.ts';
-import type { PreyField } from '../sim/PreyField.ts';
+import type { Grain, GrainVisitor } from '../sim/MatterField.ts';
 import { inView, PreyMesh, type BodyFrame } from './PreyMesh';
 
 /** Placeholder look of the scratch grain body; every grain sets its own layer's colours. */
@@ -23,8 +22,6 @@ export class PreyFieldMesh {
   /** All three meshes; add this to the scene. */
   readonly group = new THREE.Group();
   private readonly meshes: readonly PreyMesh[];
-  private readonly prey: PreyField;
-  private readonly field: MatterField;
   /** Per arena body slot: mesh and instance it was drawn as this frame (mesh -1: not drawn). */
   private readonly drawnMesh: Int8Array;
   private readonly drawnIndex: Int32Array;
@@ -34,8 +31,9 @@ export class PreyFieldMesh {
   private readonly onGrain: GrainVisitor = (g: Grain) => {
     const frame = this.frame!;
     if (g.radius < PREY.drawMinPixels * frame.view.unitsPerPixel || !inView(frame.view, g.x, g.z, g.radius)) return;
+    if (frame.sight && !frame.sight.cellShown(g.layer, g.cell)) return;
     const body = this.grainBody;
-    const layer = this.field.layers[g.layer].def;
+    const layer = frame.world.field.layers[g.layer].def;
     body.position.x = body.prevX = g.x;
     body.position.z = body.prevZ = g.z;
     body.radius = g.radius;
@@ -48,9 +46,8 @@ export class PreyFieldMesh {
     return this.meshes[ROCK_TINY].full;
   };
 
-  constructor(prey: PreyField, field: MatterField) {
-    this.prey = prey;
-    this.field = field;
+  /** `slots`: the number of arena bodies (the same in every world). */
+  constructor(slots: number) {
     this.meshes = [
       new PreyMesh(PREY.drawBudgetTiny, 'rockTiny'),
       new PreyMesh(PREY.drawBudgetLow, 'rockLow'),
@@ -58,8 +55,8 @@ export class PreyFieldMesh {
       new PreyMesh(PREY.drawBudgetSphere, 'sphere'),
     ];
     for (const m of this.meshes) this.group.add(m.mesh);
-    this.drawnMesh = new Int8Array(prey.objects.length).fill(-1);
-    this.drawnIndex = new Int32Array(prey.objects.length);
+    this.drawnMesh = new Int8Array(slots).fill(-1);
+    this.drawnIndex = new Int32Array(slots);
   }
 
   /** The mesh and instance arena body slot i was drawn as in the last frame, or null if it was not drawn. */
@@ -79,30 +76,33 @@ export class PreyFieldMesh {
     this.drawnMesh.fill(-1);
     const { x, z, radius, unitsPerPixel } = frame.view;
     const minRadius = PREY.drawMinPixels * unitsPerPixel;
+    const prey = frame.world.prey;
+    const field = frame.world.field;
 
     // Whatever is falling in, wherever its hole is drawn.
-    for (const body of this.field.infall) if (body.active) this.draw(body, frame);
-    const objects = this.prey.objects;
+    for (const body of field.infall) if (body.active) this.draw(body, frame);
+    const objects = prey.objects;
     for (let i = 0; i < objects.length; i++) if (objects[i].state === 'eating') this.drawSlot(i, frame);
     // Bodies in view.
-    const n = this.prey.query(x, z, radius, 1);
+    const n = prey.query(x, z, radius, 1);
     for (let k = 0; k < n; k++) {
-      const i = this.prey.found[k];
+      const i = prey.found[k];
       const body = objects[i];
       if (body.radius >= minRadius && inView(frame.view, body.position.x, body.position.z, body.radius)) this.drawSlot(i, frame);
     }
-    // Grains in view, the biggest layers first.
-    const layers = this.field.layers;
+    // Grains in view, the biggest layers first (online only the layers and cells the server keeps in sync).
+    const layers = field.layers;
     for (let l = layers.length - 1; l >= 0; l--) {
       if (layers[l].def.radius[1] < minRadius) break;
-      this.field.forEach(l, x, z, radius, 1, this.onGrain);
+      if (frame.sight && !frame.sight.layerShown(l)) continue;
+      field.forEach(l, x, z, radius, 1, this.onGrain);
     }
     for (const m of this.meshes) m.end();
     this.frame = null;
   }
 
   private drawSlot(i: number, frame: BodyFrame): void {
-    const m = this.draw(this.prey.objects[i], frame);
+    const m = this.draw(frame.world.prey.objects[i], frame);
     if (m < 0) return;
     this.drawnMesh[i] = m;
     this.drawnIndex[i] = this.meshes[m].count - 1;

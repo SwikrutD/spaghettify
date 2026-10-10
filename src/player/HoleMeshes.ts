@@ -49,10 +49,12 @@ export class HoleMeshes {
     for (const mesh of this.spare) mesh.disk.setLayers(layers);
   }
 
-  /** Update every hole's mesh. `view` is the camera's footprint on the play plane, `camera` places the lens candidates. */
-  update(dt: number, alpha: number, world: World, view: GroundView, camera: THREE.PerspectiveCamera): void {
+  /**
+   * Update every hole's mesh. `local` is the player's hole (drawn with `local`, the HoleMesh the lens follows), `view`
+   * the camera's footprint on the play plane, `camera` places the lens candidates.
+   */
+  update(dt: number, alpha: number, world: World, local: Hole, view: GroundView, camera: THREE.PerspectiveCamera): void {
     this.turbulence.update(dt);
-    const local = world.focus;
     this.localHole = local;
     this.drawn.length = 0;
     this.candidates.length = 0;
@@ -115,8 +117,9 @@ export class HoleMeshes {
   }
 
   /** A fresh life for the local hole. */
-  reset(world: World): void {
-    this.local.reset(world.focus);
+  reset(local: Hole): void {
+    this.localHole = local;
+    this.local.reset(local);
   }
 
   /** Mesh for a hole not drawn so far: a recycled one or a new one, with the hole's own look. */
