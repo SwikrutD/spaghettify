@@ -57,6 +57,22 @@ export class Sfx {
     this.tone('square', H.stingFreq * 1.06, H.stingFreq, H.stingTime, H.level * 0.1, 0.02, 0.01, 1800);
   }
 
+  /** A hole eats a hole. `strength` 0..1 scales the level (a distant merger is quieter). */
+  merger(strength: number): void {
+    const M = AUDIO.merger;
+    const level = M.level * Math.min(1, Math.max(0.15, strength));
+    this.tone('sine', M.boomFrom, M.boomTo, M.boomTime, level);
+    this.puff(M.boomTime, M.noiseCutoff, level * 0.5);
+    this.tone('sine', M.waveFrom, M.waveTo, M.waveTime, level * 0.35, 0.05, 0.2);
+  }
+
+  /** The local hole is being swallowed: a long falling stretch. */
+  swallowed(): void {
+    const V = AUDIO.swallowed;
+    this.tone('sawtooth', V.sweepFrom, V.sweepTo, V.time, V.level * 0.5, 0, 0.02, 1200);
+    this.tone('sine', V.sweepFrom * 0.4, V.sweepTo * 0.6, V.time, V.level * 0.7);
+  }
+
   evaporate(): void {
     const V = AUDIO.evaporate;
     this.tone('sawtooth', V.sweepFrom, V.sweepTo, V.time, V.level * 0.5, 0, 0.02, 1500);

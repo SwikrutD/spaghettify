@@ -362,7 +362,7 @@ export class MatterField {
     const x = layer.centreX(cell);
     const z = layer.centreZ(cell);
     for (const hole of this.world.holes) {
-      if (hole.phase === 'over') continue;
+      if (hole.absent) continue;
       const clear = FIELD.regrowClearViews * viewDistance(hole.radius) + layer.halfDiag;
       const dx = hole.position.x - x;
       const dz = hole.position.z - z;

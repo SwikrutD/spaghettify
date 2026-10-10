@@ -1,4 +1,5 @@
 import { CAMERA, COMETS, DANGER, GROWTH, HUNGER, PLAYER } from '../config/index.ts';
+import type { BotBrain } from './Bots.ts';
 import { Hunger, type RunPhase } from './Hunger.ts';
 import { vec2 } from './vec.ts';
 
@@ -31,10 +32,20 @@ export function topSpeed(radius: number): number {
   return PLAYER.maxSpeed * Math.pow(viewDistance(radius) / CAMERA.startDistance, PLAYER.speedExponent);
 }
 
+/**
+ * How quickly a hole's velocity chases its input (1/s). Bigger holes are heavier: they turn and accelerate more
+ * slowly (PLAYER.agilityExponent of the view distance), so a smaller hole can dodge one that is faster in a straight line.
+ */
+export function responsiveness(radius: number): number {
+  return PLAYER.responsiveness * Math.pow(viewDistance(radius) / CAMERA.startDistance, -PLAYER.agilityExponent);
+}
+
 /** Something a hole ate, as the score screen names it ("You ate a moon"). */
 export interface Meal {
   name: string;
   radius: number;
+  /** True for a whole hole (name is its nickname). */
+  hole?: boolean;
 }
 
 /**
@@ -43,6 +54,12 @@ export interface Meal {
  */
 export class Hole {
   readonly id: number;
+  /** Nickname shown over the hole (a player's own or a generated one). */
+  name = '';
+  /** Counts lives (every reset), so the renderer can tell a respawned hole from the one it drew. */
+  gen = 0;
+  /** The bot's character and plan, or null for a hole steered from outside (the local player, a remote player). */
+  bot: BotBrain | null = null;
   readonly position = vec2();
   readonly velocity = vec2();
   /** Desired movement on the play plane, length 0..1. Screen up is -z for the local player. */
@@ -73,6 +90,19 @@ export class Hole {
   shrink = 0;
   /** Seconds until this hole draws its next comet. */
   cometTimer: number = COMETS.firstDelay;
+  /** Seconds left of spawn protection: no hole can eat it, bump it or be eaten by it. */
+  protection = 0;
+  /** Holes swallowed this life. */
+  holesEaten = 0;
+  /** While being eaten (and after): who ate this hole, and where it was from the eater at that moment. */
+  eatenBy = -1;
+  eatenByName = '';
+  readonly eatOffset = vec2();
+  /** 0..1 progress of being swallowed (the renderer draws the spaghettification from it). */
+  eatProgress = 0;
+  prevEat = 0;
+  /** Seconds until a bot whose life is over comes back (the world counts it down). */
+  respawnIn = 0;
   readonly hunger: Hunger;
   /** Position and radius at the start of the last step: the renderer interpolates from them. */
   prevX = 0;
@@ -86,6 +116,11 @@ export class Hole {
 
   get phase(): RunPhase {
     return this.hunger.phase;
+  }
+
+  /** True once the hole is being swallowed or its life is over: it is no longer part of the arena's rules. */
+  get absent(): boolean {
+    return this.hunger.phase === 'over' || this.hunger.phase === 'eaten';
   }
 
   /** Only a hole in play eats: not while it evaporates or after. */
@@ -105,6 +140,10 @@ export class Hole {
 
   /** Steering, drift and the radius for `dt` seconds. Input only steers while the hole is in play and not stunned. */
   move(dt: number): void {
+    if (this.hunger.phase === 'eaten') {
+      this.velocity.x = this.velocity.z = 0;
+      return;
+    }
     const maxSpeed = topSpeed(this.radius);
     const stunned = this.stun > 0;
     this.stun = Math.max(0, this.stun - dt);
@@ -112,7 +151,7 @@ export class Hole {
     const tx = steer ? this.input.x * maxSpeed : 0;
     const tz = steer ? this.input.z * maxSpeed : 0;
     const v = this.velocity;
-    const k = 1 - Math.exp(-(stunned ? DANGER.stunResponsiveness : PLAYER.responsiveness) * dt);
+    const k = 1 - Math.exp(-(stunned ? DANGER.stunResponsiveness : responsiveness(this.radius)) * dt);
     v.x += (tx - v.x) * k;
     v.z += (tz - v.z) * k;
     v.x += this.pull.x * dt;
@@ -164,10 +203,25 @@ export class Hole {
     return lost;
   }
 
+  /** Start the life at a bigger size: this radius, its mass on the hole curve. */
+  setRadius(radius: number): void {
+    this.mass = this.peakMass = holeMassForRadius(radius);
+    this.radius = radius;
+    this.capture();
+  }
+
   /** A fresh life at (x, z). */
   reset(x = 0, z = 0): void {
+    this.gen++;
     this.mass = this.peakMass = this.startMass;
     this.radius = PLAYER.startRadius;
+    this.protection = 0;
+    this.holesEaten = 0;
+    this.eatenBy = -1;
+    this.eatenByName = '';
+    this.eatOffset.x = this.eatOffset.z = 0;
+    this.eatProgress = 0;
+    this.respawnIn = 0;
     this.eatenMass = 0;
     this.eatenCount = 0;
     this.biggestEaten = null;
@@ -192,5 +246,6 @@ export class Hole {
     this.prevX = this.position.x;
     this.prevZ = this.position.z;
     this.prevRadius = this.radius;
+    this.prevEat = this.eatProgress;
   }
 }

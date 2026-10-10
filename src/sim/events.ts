@@ -25,7 +25,7 @@ export interface BumpedEvent {
   radius: number;
   nx: number;
   nz: number;
-  by: 'body' | 'comet';
+  by: 'body' | 'comet' | 'hole';
 }
 
 /** A hole lost mass to a hit (zero at the start mass); the shed matter flies off as debris. */
@@ -42,11 +42,29 @@ export interface MilestoneEvent {
   index: number;
 }
 
-/** A hole's life ended (it finished evaporating). */
+/** A hole swallowed another: the victim spaghettifies into the eater at (x, z) (the eater's place). Radii are as of the swallow. */
+export interface HoleEatenEvent {
+  type: 'holeEaten';
+  eater: number;
+  victim: number;
+  eaterName: string;
+  victimName: string;
+  x: number;
+  z: number;
+  eaterRadius: number;
+  victimRadius: number;
+  /** Mass the eater gained. */
+  gained: number;
+}
+
+/** A hole's life ended: it finished evaporating, or finished being swallowed (`by` names and numbers the eater then). */
 export interface DiedEvent {
   type: 'died';
   hole: number;
+  cause: 'evaporated' | 'eaten';
+  by: number;
+  byName: string;
 }
 
 /** What render, audio, UI and juice react to. The world queues these as it steps; the client drains them each frame. */
-export type SimEvent = AteEvent | BumpedEvent | ShedEvent | MilestoneEvent | DiedEvent;
+export type SimEvent = AteEvent | BumpedEvent | ShedEvent | MilestoneEvent | HoleEatenEvent | DiedEvent;

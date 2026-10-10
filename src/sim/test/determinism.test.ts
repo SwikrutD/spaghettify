@@ -59,3 +59,24 @@ test('worlds are independent: stepping one never changes another', () => {
   assert.equal(digest(a), digest(b));
   assert.equal(digest(b), digest(c));
 });
+
+test('an arena with bots is deterministic too: the same seed gives the same hole fights, step for step', () => {
+  const run = (seed: number): { digests: string[]; eaten: number } => {
+    const world = new World({ seed, bots: 8 });
+    const digests: string[] = [];
+    let eaten = 0;
+    const steps = 90 / world.dt;
+    for (let i = 0; i < steps; i++) {
+      world.step();
+      for (const e of world.events) if (e.type === 'holeEaten') eaten++;
+      world.clearEvents();
+      if (i % 120 === 0) digests.push(digest(world));
+    }
+    return { digests, eaten };
+  };
+  const a = run(77);
+  const b = run(77);
+  assert.deepEqual(a.digests, b.digests);
+  assert.equal(a.eaten, b.eaten);
+  assert.notDeepEqual(a.digests, run(78).digests);
+});

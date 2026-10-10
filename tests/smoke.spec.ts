@@ -153,7 +153,7 @@ test('game loads, renders frames without console errors and the player moves', a
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
   // This test is about input moving the hole: no knockback from a body the hole happens to drift into.
@@ -192,7 +192,7 @@ test('eating a smaller object grows the player; bigger objects are left alone', 
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
 
@@ -241,7 +241,7 @@ test('lensing bends the disk around the hole and the core stays black', async ({
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.mouse.move(640, 360);
   await page.waitForFunction(() => window.__spaghettify?.frames > 30);
   await startRun(page);
@@ -298,7 +298,7 @@ test('edible prey spaghettify: they stretch toward the hole and drain into the c
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.mouse.move(640, 360);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
@@ -397,7 +397,7 @@ test('size milestones: eating across one shows its banner; the zoom stays contin
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.mouse.move(240, 135);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
@@ -455,12 +455,30 @@ test('size milestones: eating across one shows its banner; the zoom stays contin
     const { player, prey } = d;
     const names = [...new Set(prey.objects.map((o) => o.className))];
     // A moon well away from the patch that prey.clear() emptied around the hole.
+    // The earlier steps of this test cleared patches of the field (prey.clear) and let the hole drift under the pull of
+    // giants: start from a full field again, so wherever the moon is there is small matter around it.
+    (d.field as unknown as { reset(): void }).reset();
+    // Where the hole will stand next to a moon (on the side toward the middle of the arena).
+    const standBy = (o: BodyProbe) => {
+      const inward = Math.hypot(o.position.x, o.position.z);
+      const gap = o.radius + player.radius * 6;
+      return { x: o.position.x - (o.position.x / inward) * gap, z: o.position.z - (o.position.z / inward) * gap };
+    };
     const i = prey.objects.findIndex(
-      (o) => o.className === 'moon' && o.state === 'alive' && Math.hypot(o.position.x - player.position.x, o.position.z - player.position.z) > 800,
+      (o) =>
+        o.className === 'moon' &&
+        o.state === 'alive' &&
+        Math.hypot(o.position.x, o.position.z) < 1000 &&
+        Math.hypot(o.position.x - player.position.x, o.position.z - player.position.z) > 800,
     );
+    if (i < 0) throw new Error('no moon far enough from the hole');
     const moon = prey.objects[i];
-    player.position.x = moon.position.x + moon.radius + player.radius * 6;
-    player.position.z = moon.position.z;
+    const at = standBy(moon);
+    // Nothing pulls or knocks the hole while the camera catches up.
+    d.dangers.enabled = false;
+    player.velocity.x = player.velocity.z = 0;
+    player.position.x = at.x;
+    player.position.z = at.z;
     // Let the camera catch up with the jump.
     for (let k = 0; k < 60; k++) {
       const f = d.frames;
@@ -490,7 +508,7 @@ test('size milestones: eating across one shows its banner; the zoom stays contin
 test('portrait screens get a horizontal FOV floor: wider view, the hole and fed disk fit the width', async ({ page }) => {
   // A portrait phone (390x844) and the same screen turned to landscape.
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
   await page.evaluate(() => (window.__spaghettify.hunger.enabled = false));
@@ -537,7 +555,7 @@ test('speed holds on screen as the hole grows', async ({ page }) => {
   test.setTimeout(120_000);
   // Small viewport: software rendering is slow and this test only needs frames to tick.
   await page.setViewportSize({ width: 480, height: 270 });
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
   // Pull and collisions would bend the top speed; this test is about the movement model alone.
@@ -566,10 +584,12 @@ test('speed holds on screen as the hole grows', async ({ page }) => {
   const small = await run(0.25);
   const big = await run(100);
   expect(big.view).toBeGreaterThan(small.view * 2);
-  // On-screen speed (world speed over view distance) stays within 25 percent however big the hole is.
-  const ratio = big.speed / big.view / (small.speed / small.view);
-  expect(ratio).toBeGreaterThan(0.75);
-  expect(ratio).toBeLessThan(1.25);
+  // World speed follows the view distance to the power 0.85 (PLAYER.speedExponent), so on-screen speed eases off
+  // only a little as the hole grows: a bigger hole is a bit faster than a smaller one, never the other way round.
+  expect(big.speed).toBeGreaterThan(small.speed);
+  const exponent = Math.log(big.speed / small.speed) / Math.log(big.view / small.view);
+  expect(exponent).toBeGreaterThan(0.75);
+  expect(exponent).toBeLessThan(0.95);
 });
 
 test('hunger: starving drains mass, dims the disk, ends the run with a score screen, and play again resets cleanly', async ({ page }) => {
@@ -581,7 +601,7 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.mouse.move(240, 135);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
@@ -655,8 +675,8 @@ test('hunger: starving drains mass, dims the disk, ends the run with a score scr
   });
   expect(fresh.mass).toBeCloseTo(0.25, 1);
   expect(fresh.radius).toBeCloseTo(0.5, 1);
-  expect(fresh.eatenCount).toBe(0);
-  expect(fresh.biggest).toBeNull();
+  // It respawned where there is food around, so a meal or two straight away is fine.
+  expect(fresh.eatenCount).toBeLessThan(5);
   expect(fresh.milestone).toBe(0);
   expect(fresh.idle).toBeLessThan(1);
   expect(fresh.starvation).toBeLessThan(0.05);
@@ -727,7 +747,7 @@ test('share card: the score screen renders a card with the run photo and SAVE CA
     Object.defineProperty(Navigator.prototype, 'canShare', { value: undefined, configurable: true });
   });
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.mouse.move(240, 135);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
@@ -805,7 +825,7 @@ test('leaderboard: the title shows the top few, the score screen posts the run a
   });
   await page.addInitScript(() => localStorage.setItem('spaghettify.nickname', 'Pea'));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   // Title: the top five, the player's own row lit, nicknames as plain text.
   const titleBoard = page.getByTestId('title-board');
@@ -837,7 +857,7 @@ test('leaderboard: with the server down or hanging the game plays, the board say
   await page.route('**/api/scores', () => {});
   await page.addInitScript(() => localStorage.setItem('spaghettify.nickname', 'Pea'));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.mouse.move(240, 135);
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await expect(page.getByTestId('title-board')).toBeHidden();
@@ -865,7 +885,7 @@ test('leaderboard: without a nickname nothing is posted and the board shows wher
     return route.abort();
   });
   await page.route('**/api/scores/rank*', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify({ rank: 17, total: 30 }) }));
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
   await playShortRun(page);
@@ -881,7 +901,7 @@ test('audio: the context is created after a click, events trigger sounds, and th
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
 
   // Browsers block audio before a gesture: no context yet, and the game runs fine without one.
@@ -932,7 +952,7 @@ test('audio: a size milestone, the hunger warning and evaporation each trigger t
   page.on('pageerror', (e) => errors.push(e.message));
 
   await page.setViewportSize({ width: 480, height: 320 });
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page, true);
   await page.waitForFunction(() => window.__spaghettify.audio.context !== null);
@@ -988,7 +1008,7 @@ test('audio: with Web Audio unavailable the game still runs and nothing errors',
     Object.defineProperty(window, 'webkitAudioContext', { value: undefined });
     Object.defineProperty(window, 'localStorage', { get: () => { throw new Error('blocked'); } });
   });
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page, true);
   await openSettingsFromPause(page);
@@ -1019,7 +1039,7 @@ test('title screen holds the run until Play, shows the best score and saves the 
     }
   });
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await expect(page.getByTestId('title-screen')).toBeVisible();
   await expect(page.getByTestId('title-best')).toHaveText('BEST 12,345');
@@ -1059,7 +1079,7 @@ test('pause: Escape, the pause button and tab blur freeze the run; resume and qu
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
   await page.mouse.move(1000, 360);
@@ -1119,7 +1139,7 @@ test('settings: scheme, quality and volume persist across a reload and keyboard 
   });
   page.on('pageerror', (e) => errors.push(e.message));
 
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await page.getByTestId('title-settings').click();
   await expect(page.getByTestId('settings-panel')).toBeVisible();
@@ -1171,7 +1191,7 @@ test('auto quality: default on, steps down on slow frames, probes up once, locks
   await page.setViewportSize({ width: 480, height: 270 });
   // Undo the High preset that beforeEach seeds: this test wants the real default.
   await page.addInitScript(() => localStorage.removeItem('spaghettify.settings'));
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 2);
 
   // Each scenario feeds synthetic frame times in one synchronous call, so real (slow SwiftShader)
@@ -1222,7 +1242,7 @@ test('auto quality: default on, steps down on slow frames, probes up once, locks
   await page.waitForTimeout(300);
 
   // `?perf` shows the frame time readout (the GPU timer is not available under SwiftShader).
-  await page.goto('/?perf');
+  await page.goto('/?perf&bots=0');
   await expect(page.getByTestId('perf-overlay')).toContainText('fps');
   await expect(page.getByTestId('perf-overlay')).toContainText('quality');
   expect(errors).toEqual([]);
@@ -1234,7 +1254,7 @@ test('analytics: nothing is loaded or sent off the live domain, and a run still 
   page.on('request', (r) => {
     if (r.url().includes('umami')) umami.push(r.url());
   });
-  await page.goto('/');
+  await page.goto('/?bots=0');
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
   await startRun(page);
   await page.waitForTimeout(500);
@@ -1260,7 +1280,7 @@ test.describe('touch and gamepad', () => {
       if (m.type() === 'error') errors.push(m.text());
     });
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.goto('/');
+    await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     expect(await page.evaluate(() => window.__spaghettify.settings.scheme)).toBe('finger');
     await page.getByTestId('play').tap();
@@ -1297,7 +1317,7 @@ test.describe('touch and gamepad', () => {
         },
       });
     });
-    await page.goto('/');
+    await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     await page.getByTestId('play').tap();
     await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
@@ -1318,7 +1338,7 @@ test.describe('touch and gamepad', () => {
   test('joystick: steers by drag from the touch-down point, shows a stick, and the choice persists', async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.goto('/');
+    await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     await page.getByTestId('title-settings').tap();
     await page.getByTestId('control-scheme').selectOption('joystick');
@@ -1353,7 +1373,7 @@ test.describe('touch and gamepad', () => {
       navigator.getGamepads = () =>
         [{ connected: true, axes: (window as unknown as { __pad: number[] }).__pad, buttons: [] } as unknown as Gamepad];
     });
-    await page.goto('/');
+    await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     await page.getByTestId('play').tap();
     await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
@@ -1369,7 +1389,7 @@ test.describe('touch and gamepad', () => {
   });
 
   test('juice: a big meal shakes the camera, a tiny one only kicks it', async ({ page }) => {
-    await page.goto('/');
+    await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     await page.getByTestId('play').tap();
     await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
@@ -1413,7 +1433,7 @@ test.describe('dangers', () => {
       if (m.type() === 'error' && !m.text().includes('Failed to load resource')) errors.push(m.text());
     });
     page.on('pageerror', (e) => errors.push(e.message));
-    await page.goto('/');
+    await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     await startRun(page, realClick);
     await page.evaluate(

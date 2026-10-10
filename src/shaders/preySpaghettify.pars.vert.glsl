@@ -15,8 +15,8 @@ attribute float aGlow;
 // Heat of the body itself, 0..1, wherever it is (hot shed debris).
 attribute float aHeat;
 
-// Hole centre (world x, z) and core radius.
-uniform vec3 uHole;
+// Per instance: the hole this body stretches toward or falls into: centre (world x, z) and core radius.
+attribute vec3 aHole;
 // Across-axis scale = stretch ^ -uSqueeze (0.5 preserves volume).
 uniform float uSqueeze;
 // Radial distances below uKnee core radii are squashed toward the centre.
@@ -40,9 +40,9 @@ vec3 spaghettify(vec3 centre, vec3 p) {
   // Radial distance from the hole after stretching. Below the knee it is squashed smoothly (C1)
   // toward zero, so a stream reaching the centre bunches up inside the core instead of
   // coming out the other side.
-  float rc = length(centre.xz - uHole.xy);
+  float rc = length(centre.xz - aHole.xy);
   float r = rc + along * s;
-  float knee = max(uKnee * uHole.z, 1e-4);
+  float knee = max(uKnee * aHole.z, 1e-4);
   if (r < knee) r = knee * exp((r - knee) / knee);
 
   vec3 q = centre + u * (r - rc) + across * pow(s, -uSqueeze);
@@ -50,12 +50,12 @@ vec3 spaghettify(vec3 centre, vec3 p) {
   // Differential rotation: the end nearer the hole leads, the far end trails.
   float phi = clamp(aStretch.w * log(max(rc, 1e-4) / r), -3.0, 3.0);
   spgPhi = phi;
-  vec2 o = q.xz - uHole.xy;
+  vec2 o = q.xz - aHole.xy;
   float c = cos(phi);
   float sn = sin(phi);
-  q.xz = uHole.xy + vec2(o.x * c + o.y * sn, -o.x * sn + o.y * c);
+  q.xz = aHole.xy + vec2(o.x * c + o.y * sn, -o.x * sn + o.y * c);
 
-  vGlow = aGlow * (1.0 - smoothstep(1.0, uGlowReach, r / uHole.z));
+  vGlow = aGlow * (1.0 - smoothstep(1.0, uGlowReach, r / aHole.z));
   vHeat = aHeat;
   return q;
 }

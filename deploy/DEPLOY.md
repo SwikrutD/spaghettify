@@ -184,7 +184,7 @@ since M16; the name stayed for compatibility. Custom events (sent only on the li
 | Event | When | Fields |
 | --- | --- | --- |
 | `run-start` | Play from the title screen or Play again | `from` (`title` or `restart`) |
-| `run-end` | The hole evaporates | `band` (score range), `tier` (the size milestone reached, 1 to 9), `seconds`, `eaten`, `newBest` |
+| `run-end` | The life ends (evaporated or eaten by another hole) | `band` (score range), `tier` (the size milestone reached, 1 to 9), `seconds`, `eaten`, `newBest`, `cause` (`evaporated` or `eaten`) |
 | `leaderboard-submit` | The score screen posted a run (only with a nickname set) | `result` (`ok`, `offline`, `nickname`, `implausible`, `invalid` or `rate`), `tier` |
 | `share` | The share card was shared (share sheet) or saved (download) from the score screen | `method` (`share` or `download`), `band`, `tier` |
 

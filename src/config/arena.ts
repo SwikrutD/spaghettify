@@ -86,6 +86,16 @@ export const ARENA = {
   respawnRetry: 2,
   /** The start of a life is kept clear of anything the hole cannot eat for this many view distances (radius alone). */
   spawnClearViews: 0.45,
+  /**
+   * A hole (re)spawning in a running arena tries this many random places for one out of every other hole's sight
+   * (holeClearViews of its view distance plus the newcomer's), with bodies it cannot eat pulling it by at most
+   * spawnMaxPull of its steering authority (the giants' reach covers most of the arena, so some pull is unavoidable)
+   * and none within spawnClearViews of its view distance of touching it, and at least spawnFood meals within spawnFoodViews of its view distance. Failing all that, the best place found.
+   */
+  spawnTries: 60,
+  spawnMaxPull: 0.02,
+  spawnFood: 12,
+  spawnFoodViews: 0.8,
 } as const;
 
 /**

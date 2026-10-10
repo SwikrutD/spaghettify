@@ -83,7 +83,7 @@ export class CometField {
   update(dt: number): void {
     const rng = this.world.rng;
     for (const hole of this.world.holes) {
-      if (hole.phase !== 'playing') continue;
+      if (hole.phase !== 'playing' || hole.bot) continue;
       hole.cometTimer -= dt;
       if (hole.cometTimer > 0) continue;
       hole.cometTimer = rng.range(COMETS.interval[0], COMETS.interval[1]);
@@ -110,7 +110,7 @@ export class CometField {
   /** True once the comet is far from every hole in play and moving away from each of them. */
   private leftEveryone(comet: Comet): boolean {
     for (const hole of this.world.holes) {
-      if (hole.phase === 'over') continue;
+      if (hole.absent) continue;
       const dx = comet.position.x - hole.position.x;
       const dz = comet.position.z - hole.position.z;
       const far = COMETS.despawnDistance * viewDistance(hole.radius);

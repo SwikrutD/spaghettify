@@ -172,6 +172,11 @@ export class AudioEngine {
     this.guard(() => this.sfx?.hit(), 'hit');
   }
 
+  /** A hole ate a hole: `strength` 0..1 (1 when the local hole is in it). */
+  merger(strength: number): void {
+    this.guard(() => this.sfx?.merger(strength), 'merger');
+  }
+
   /** Fresh run: the drone comes back and the warning and growth trackers restart. */
   reset(radius: number): void {
     this.evaporating = false;
@@ -183,13 +188,19 @@ export class AudioEngine {
   /**
    * Per-frame update. `hunger` is the smoothed 0..1 hunger level, `phase` the run phase, `dt` real seconds.
    */
-  update(dt: number, radius: number, hunger: number, phase: 'playing' | 'evaporating' | 'over'): void {
+  update(dt: number, radius: number, hunger: number, phase: 'playing' | 'evaporating' | 'eaten' | 'over'): void {
     if (!this.context || !this.drone || !this.sfx) return;
     this.guard(() => {
       if (phase === 'evaporating' && !this.evaporating) {
         this.evaporating = true;
         this.sfx?.evaporate();
         this.count('evaporate');
+        this.drone?.fadeOut();
+      }
+      if (phase === 'eaten' && !this.evaporating) {
+        this.evaporating = true;
+        this.sfx?.swallowed();
+        this.count('swallowed');
         this.drone?.fadeOut();
       }
       this.drone?.update(radius, hunger);

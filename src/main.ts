@@ -1,8 +1,9 @@
 import * as THREE from 'three';
-import { DANGER, JUICE, LIGHTING, MILESTONES, QUALITY, RENDER } from './config';
+import { BOTS, DANGER, HOLES, JUICE, LIGHTING, MILESTONE_FX, MILESTONES, QUALITY, RENDER } from './config';
 import { initAnalytics, scoreBand, track } from './analytics/analytics';
 import { AudioEngine } from './audio/AudioEngine';
 import { objectView, poolView } from './debug/debugViews';
+import { MergerRipple } from './effects/MergerRipple';
 import { ShedBurst } from './effects/ShedBurst';
 import { MilestoneSetPiece } from './effects/MilestoneSetPiece';
 import { CometFieldMesh } from './entities/CometFieldMesh';
@@ -14,7 +15,8 @@ import { GamepadInput } from './input/GamepadInput';
 import { KeyboardInput } from './input/KeyboardInput';
 import { MouseInput } from './input/MouseInput';
 import { TouchInput } from './input/TouchInput';
-import { blink, HoleMesh } from './player/HoleMesh';
+import { blink } from './player/HoleMesh';
+import { HoleMeshes } from './player/HoleMeshes';
 import { AutoQuality } from './render/AutoQuality';
 import { GameCamera } from './render/GameCamera';
 import { Renderer } from './render/Renderer';
@@ -25,12 +27,15 @@ import { deliverCard, shareMethod } from './share/share';
 import { cardBlob, cardFileName, renderShareCard, shareText } from './share/shareCard';
 import { isTouchFirst, Settings } from './settings/Settings';
 import { canSwallow } from './sim/body.ts';
-import type { AteEvent } from './sim/events.ts';
-import type { Meal } from './sim/Hole.ts';
+import type { AteEvent, DiedEvent, HoleEatenEvent } from './sim/events.ts';
+import { viewDistance, type Meal } from './sim/Hole.ts';
+import { generateName } from './sim/names.ts';
 import { classNamed, MILESTONE_MASSES } from './sim/milestones.ts';
 import { World } from './sim/World.ts';
+import { Hud } from './ui/Hud';
 import { HungerOverlay } from './ui/HungerOverlay';
 import { postRunToBoard, refreshTitleBoard } from './ui/leaderboardFlow';
+import { NameTags } from './ui/NameTags';
 import { PauseMenu } from './ui/PauseMenu';
 import { PerfOverlay } from './ui/PerfOverlay';
 import { ScoreScreen, type RunStats } from './ui/ScoreScreen';
@@ -42,14 +47,24 @@ import { loadBest, saveBest, TitleScreen } from './ui/TitleScreen';
 initAnalytics();
 const canvas = document.getElementById('game') as HTMLCanvasElement;
 
-// The game state and rules (src/sim): one offline arena. The local player is the world's focus hole, steered by
-// the input vector.
-const world = new World({ seed: (Math.random() * 2 ** 32) >>> 0 });
+// The game state and rules (src/sim): one offline arena with bot holes. The local player is the world's focus hole,
+// steered by the input vector. `?seed=` fixes the arena, `?bots=` sets the number of bots (the tests use 0).
+const params = new URLSearchParams(location.search);
+const botParam = Number(params.get('bots'));
+const world = new World({
+  seed: params.has('seed') ? Number(params.get('seed')) >>> 0 : (Math.random() * 2 ** 32) >>> 0,
+  bots: params.has('bots') && Number.isFinite(botParam) ? Math.max(0, Math.min(40, Math.round(botParam))) : BOTS.count,
+});
 const local = world.focus;
+// A name for the player until they type one.
+const fallbackName = generateName(world.rng, (n) => world.holes.some((h) => h.name === n));
+local.name = fallbackName;
 
 // What the world looks like. These only read the sim state and react to its events.
 const scene = new THREE.Scene();
-const holeMesh = new HoleMesh();
+const holeMeshes = new HoleMeshes();
+const holeMesh = holeMeshes.local;
+const ripple = new MergerRipple();
 const preyMesh = new PreyFieldMesh(world.prey, world.field);
 const cometMesh = new CometFieldMesh(world.comets);
 const debrisMesh = new DebrisMesh(world.debris);
@@ -60,7 +75,8 @@ const keyLight = new THREE.DirectionalLight(LIGHTING.keyColor, LIGHTING.key);
 keyLight.position.set(...LIGHTING.keyPosition);
 scene.add(
   starfield.points,
-  holeMesh.group,
+  holeMeshes.group,
+  ripple.group,
   preyMesh.group,
   cometMesh.group,
   debrisMesh.object3d,
@@ -69,7 +85,7 @@ scene.add(
   new THREE.AmbientLight(0xffffff, LIGHTING.ambient),
   keyLight,
 );
-const bodyFrame: BodyFrame = { world, alpha: 1, dt: 0, time: 0, hole: holeMesh, view: { x: 0, z: 0, radius: 1, unitsPerPixel: 1, nearZ: 1, farZ: -1, nearHalf: 1, farHalf: 1 } };
+const bodyFrame: BodyFrame = { world, alpha: 1, dt: 0, time: 0, holes: holeMeshes.drawn, view: { x: 0, z: 0, radius: 1, unitsPerPixel: 1, nearZ: 1, farZ: -1, nearHalf: 1, farHalf: 1 } };
 const gameCamera = new GameCamera(holeMesh.position, local.radius);
 const setPiece = new MilestoneSetPiece();
 
@@ -79,6 +95,10 @@ const snapshot = new RunSnapshot();
 const banner = new MilestoneBanner();
 const hungerOverlay = new HungerOverlay();
 const scoreScreen = new ScoreScreen();
+const hud = new Hud();
+const nameTags = new NameTags();
+/** 0..1 flash when the local hole eats a hole or is eaten; decays on real time. */
+let mergerFlash = 0;
 
 /** The local hole ate: the disk heats; a new biggest meal is the share card's photo; the camera kicks (and shakes for big ones). */
 function onAte(e: AteEvent): void {
@@ -102,28 +122,50 @@ function onMilestone(index: number): void {
   gameCamera.addShake(JUICE.milestoneShake);
 }
 
-/** React to what the world did since the last frame. Other holes' events are not drawn yet. */
+/** A hole swallowed another: the ripple, the feed line, and the shake, flash and boom for the local hole's own mergers (fainter with distance). */
+function onHoleEaten(e: HoleEatenEvent): void {
+  ripple.emit(e.x, e.z, e.eaterRadius);
+  const mine = e.eater === local.id || e.victim === local.id;
+  hud.addFeed(`${e.eaterName} ate ${e.victimName}`, mine);
+  const dx = e.x - local.position.x;
+  const dz = e.z - local.position.z;
+  const range = viewDistance(local.radius) * HOLES.mergerShakeViews;
+  const near = mine ? 1 : Math.max(0, 1 - Math.hypot(dx, dz) / range);
+  if (near <= 0) return;
+  gameCamera.addShake(HOLES.mergerShake * near);
+  audio.merger(near);
+  if (mine) mergerFlash = 1;
+}
+
+/** React to what the world did since the last frame. */
 function handleEvents(): void {
   for (const e of world.events) {
-    if (e.hole !== local.id) continue;
     switch (e.type) {
       case 'ate':
-        onAte(e);
+        if (e.hole === local.id) onAte(e);
         break;
       case 'bumped':
-        // A hit: shake, thud and a spray of sparks (the sim throws the shed mass out as debris).
-        gameCamera.addShake(DANGER.hitShake);
-        audio.hit();
-        shedBurst.emit(e.x, e.z, e.nx, e.nz, e.radius);
+        if (e.hole === local.id) {
+          // A hit: shake, thud and a spray of sparks (the sim throws the shed mass out as debris).
+          gameCamera.addShake(DANGER.hitShake);
+          audio.hit();
+          shedBurst.emit(e.x, e.z, e.nx, e.nz, e.radius);
+        } else if (Math.hypot(e.x - local.position.x, e.z - local.position.z) < viewDistance(local.radius) * 1.2) {
+          shedBurst.emit(e.x, e.z, e.nx, e.nz, e.radius);
+        }
         break;
       case 'shed':
-        holeMesh.squash();
+        if (e.hole === local.id) holeMesh.squash();
+        else holeMeshes.meshOf(world.hole(e.hole))?.squash();
         break;
       case 'milestone':
-        onMilestone(e.index);
+        if (e.hole === local.id) onMilestone(e.index);
+        break;
+      case 'holeEaten':
+        onHoleEaten(e);
         break;
       case 'died':
-        endRun();
+        if (e.hole === local.id) endRun(e);
         break;
     }
   }
@@ -131,7 +173,7 @@ function handleEvents(): void {
 }
 
 // Life over: score = peak mass gained (scaled to points), shown with the biggest meal and the size reached.
-function endRun(): void {
+function endRun(died: DiedEvent): void {
   const score = local.score;
   const previous = loadBest();
   const newBest = score > previous;
@@ -144,6 +186,8 @@ function endRun(): void {
     milestoneNumber: local.milestone + 1,
     milestoneTitle: MILESTONES[local.milestone].title,
     eatenCount: local.eatenCount,
+    holesEaten: local.holesEaten,
+    eatenBy: died.cause === 'eaten' ? died.byName : null,
     seconds: local.hunger.runTime,
   };
   scoreScreen.show(stats);
@@ -155,6 +199,7 @@ function endRun(): void {
     seconds: Math.round(local.hunger.runTime),
     eaten: local.eatenCount,
     newBest,
+    cause: died.cause,
   });
   refreshMenus();
 }
@@ -194,27 +239,29 @@ let pending = 0;
 
 /** Draw the world as of `alpha` (0..1) between its last two steps. `dt` is seconds since the last frame. */
 function renderWorld(dt: number, alpha: number): void {
-  holeMesh.update(dt, local, alpha);
   bodyFrame.alpha = alpha;
   bodyFrame.dt = dt;
   bodyFrame.time += dt;
   // What the camera sees (as of the last frame's placement; it moves little in one frame), with a margin for
   // bodies whose centre is just off screen.
   gameCamera.groundView(bodyFrame.view, gameCamera.distance * 0.1);
+  holeMeshes.update(dt, alpha, world, bodyFrame.view, gameCamera.camera);
+  renderer.lensing.extras = holeMeshes.lensExtras;
+  ripple.update(dt);
   preyMesh.update(bodyFrame);
   cometMesh.update(bodyFrame);
   debrisMesh.update(bodyFrame);
   shedBurst.update(dt);
 }
 
-// Fresh run: a fresh arena (hole, field, bodies, comets, debris, hunger), then the camera and everything drawn from it.
-function resetRun(): void {
-  world.reset();
-  pending = 0;
-  holeMesh.reset(local);
+// A fresh life for the local hole (the camera and everything drawn from it start over; the effects are cleared).
+function restartDrawing(): void {
+  holeMeshes.reset(world);
   gameCamera.reset(holeMesh.position, local.radius);
   shedBurst.reset();
+  ripple.reset();
   setPiece.reset();
+  mergerFlash = 0;
   hungerOverlay.reset();
   banner.reset();
   audio.reset(local.radius);
@@ -222,8 +269,29 @@ function resetRun(): void {
   renderWorld(0, 1);
 }
 
+// A fresh arena (hole, bots, field, bodies, comets, debris), for quitting to the title screen.
+function resetRun(): void {
+  world.reset();
+  local.name = nameForRun();
+  pending = 0;
+  hud.clearFeed();
+  restartDrawing();
+}
+
+// Play again after a life: the hole respawns in the arena as it runs, at a clear spawn point.
+function respawnLocal(): void {
+  world.respawn(local);
+  local.name = nameForRun();
+  restartDrawing();
+}
+
+/** The nickname from the title screen, or the generated one. */
+function nameForRun(): string {
+  return title.nicknameValue || fallbackName;
+}
+
 const renderer = new Renderer(canvas, scene, gameCamera.camera, holeMesh);
-renderer.onBeforeRender = (gl) => holeMesh.disk.prepare(gl);
+renderer.onBeforeRender = (gl) => holeMeshes.turbulence.prepare(gl);
 const touch = new TouchInput(canvas);
 const input = new InputManager([
   { id: 'keyboard', source: new KeyboardInput() },
@@ -248,8 +316,8 @@ function qualityLevel(): number {
 function applyQuality(index = qualityLevel()): void {
   const level = QUALITY.levels[index];
   renderer.setQuality(level);
-  holeMesh.disk.setDetail(level.diskLayers, level.diskOctaves);
-  holeMesh.disk.setRenderHeight(renderer.bufferHeight);
+  holeMeshes.setDetail(level.diskLayers, level.diskOctaves);
+  holeMeshes.turbulence.setRenderHeight(renderer.bufferHeight);
   shedBurst.setViewport(renderer.bufferHeight, gameCamera.camera.fov);
 }
 autoQuality.onChange = () => applyQuality();
@@ -297,6 +365,7 @@ function closeSettings(): void {
 }
 
 title.onPlay = () => {
+  local.name = nameForRun();
   title.hide();
   setMode('playing');
   track('run-start', { from: 'title' });
@@ -316,7 +385,7 @@ pauseMenu.onQuit = () => {
 };
 settingsPanel.onClose = closeSettings;
 scoreScreen.onRestart = () => {
-  resetRun();
+  respawnLocal();
   refreshMenus();
   track('run-start', { from: 'restart' });
 };
@@ -342,7 +411,7 @@ function resize(): void {
   const w = window.innerWidth;
   const h = window.innerHeight;
   renderer.resize(w, h);
-  holeMesh.disk.setRenderHeight(renderer.bufferHeight);
+  holeMeshes.turbulence.setRenderHeight(renderer.bufferHeight);
   gameCamera.resize(w, h);
   shedBurst.setViewport(renderer.bufferHeight, gameCamera.camera.fov);
 }
@@ -358,6 +427,14 @@ const debug = {
   /** Smoothed CPU milliseconds per frame (simulation steps, drawing and issuing the draw calls). */
   cpuMs: 0,
   world,
+  holes: holeMeshes,
+  hud,
+  nameTags,
+  ripple,
+  /** Bot holes in the world, with their characters (tests and tuning). */
+  get bots() {
+    return world.holes.filter((h) => h.bot);
+  },
   player: objectView(local, {
     disk: holeMesh.disk,
     group: holeMesh.group,
@@ -496,6 +573,21 @@ const debug = {
 // `?perf` in the URL shows frame time, GPU time per pass (where the browser allows it) and the quality level.
 const perfOverlay = new URLSearchParams(location.search).has('perf') ? new PerfOverlay(renderer, () => qualityLevel()) : null;
 
+/** Names over the holes in view, and the HUD only while there is a run to show (not on the title screen or the score screen). */
+function updateTags(): void {
+  const showing = mode !== 'title' && local.phase !== 'over';
+  hud.setVisible(showing);
+  nameTags.setVisible(showing);
+  if (!showing) return;
+  nameTags.begin();
+  for (const hole of world.holes) {
+    if (hole.phase !== 'playing') continue;
+    const mesh = hole === local ? holeMesh : holeMeshes.meshOf(hole);
+    if (mesh && mesh.group.visible) nameTags.add(hole, mesh, local, gameCamera.camera, window.innerWidth, window.innerHeight);
+  }
+  nameTags.end();
+}
+
 function drawFrame(start: number): void {
   renderer.render();
   snapshot.afterRender(canvas);
@@ -534,15 +626,18 @@ function frame(now: number): void {
   // A run with no photo yet gets one as the hole starts to evaporate.
   if (local.phase === 'evaporating') snapshot.ensure();
   hungerOverlay.update(realDt, local.hunger.level);
-  // The disk dims as the hole starves and blinks while it is invulnerable after a hit.
+  // The disk dims as the hole starves and blinks while it is invulnerable after a hit or just spawned.
   holeMesh.disk.starvation = Math.max(hungerOverlay.level, blink(local));
   renderWorld(realDt, alpha);
   audio.update(realDt, local.radius, hungerOverlay.level, local.phase);
   gameCamera.punch = setPiece.punch;
-  gameCamera.update(realDt, holeMesh.position, holeMesh.radius);
-  arenaWall.update(realDt, holeMesh.radius);
+  gameCamera.update(realDt, holeMesh.position, holeMesh.simRadius);
+  arenaWall.update(realDt, holeMesh.simRadius);
   starfield.update(holeMesh.position, gameCamera.viewScale);
-  banner.update(setPiece.flash);
+  mergerFlash *= Math.exp(-realDt / 0.25);
+  banner.update(Math.max(setPiece.flash, (mergerFlash * HOLES.mergerFlash) / MILESTONE_FX.flashPeak));
+  hud.update(realDt, world.holes, local);
+  updateTags();
   drawFrame(start);
 }
 requestAnimationFrame(frame);

@@ -1,6 +1,7 @@
 /** All tunable numbers live here. Game logic must not hard-code these. */
 
 export * from './arena.ts';
+export * from './holes.ts';
 export * from './quality.ts';
 
 /** The shared simulation (src/sim). The client renders between steps, interpolating positions. */
@@ -16,12 +17,19 @@ export const PLAYER = {
   maxSpeed: 9,
   /**
    * Top speed scales with the view distance for the hole's radius (see CAMERA.zoomExponent) ^ this. 1 keeps the
-   * on-screen speed constant as the view zooms out (the Hole.io feel: always fast). The radius alone sets it, not
-   * a client's screen shape, so every hole in an arena gets the same speed for its size.
+   * on-screen speed constant as the view zooms out (the Hole.io feel: always fast); a bit under 1 lets the screen
+   * speed ease off as a hole grows, so a bigger hole is only slightly faster than one a little smaller (hole vs
+   * hole: the smaller one can flee, by turning and cover, not by speed). The radius alone sets it, not a client's
+   * screen shape, so every hole in an arena gets the same speed for its size.
    */
-  speedExponent: 1,
-  /** How quickly velocity chases the desired velocity (1/s). Lower = more drifty. */
+  speedExponent: 0.85,
+  /** How quickly velocity chases the desired velocity (1/s) at the starting size. Lower = more drifty. */
   responsiveness: 3.2,
+  /**
+   * Bigger holes are heavier: responsiveness scales with (view distance / start distance) ^ -this, so they turn and
+   * accelerate more slowly. Together with the speed curve this is how a smaller hole escapes a bigger one (dodging).
+   */
+  agilityExponent: 0.15,
   /** Passive drag applied every frame (1/s). */
   drag: 0.4,
 } as const;
@@ -481,6 +489,13 @@ export const LENSING = {
   radius: 18,
   /** Supersampled zone radius as a multiple of einsteinRadius (samples per pixel come from QUALITY). */
   sampleZone: 1.3,
+  /**
+   * Other holes: the nearest few on screen also bend the picture (the shader adds their deflections to the main
+   * lens's; up to `extraLenses`, which must match MAX_EXTRA in lensing.frag.glsl), if their core is at least
+   * `extraMinCore` of the screen height. The rest are drawn with disk, ring and core only.
+   */
+  extraLenses: 2,
+  extraMinCore: 0.012,
 } as const;
 
 export const BLOOM = {
@@ -621,6 +636,26 @@ export const AUDIO = {
     crunchTime: 0.25,
     stingFreq: 466,
     stingTime: 0.3,
+  },
+
+  /** A hole eating a hole (heard when the local hole is in it, or close): a deep boom with a wave rising over it. */
+  merger: {
+    level: 0.7,
+    boomFrom: 140,
+    boomTo: 32,
+    boomTime: 0.9,
+    waveFrom: 180,
+    waveTo: 720,
+    waveTime: 1.1,
+    noiseCutoff: 500,
+  },
+
+  /** The local hole being swallowed: a long falling stretch (the evaporation sound shifted lower), after the merger boom. */
+  swallowed: {
+    level: 0.6,
+    time: 1.4,
+    sweepFrom: 700,
+    sweepTo: 50,
   },
 
   evaporate: {

@@ -72,7 +72,7 @@ export class CometFieldMesh {
 
   update(frame: BodyFrame): void {
     this.timeUniform.value += frame.dt;
-    this.nuclei.begin(frame);
+    this.nuclei.begin();
     const objects = this.field.objects;
     for (let i = 0; i < objects.length; i++) {
       const comet = objects[i];

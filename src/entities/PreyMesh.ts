@@ -5,7 +5,7 @@ import { canSwallow, sizeWeight, type Body } from '../sim/body.ts';
 import { lerp, smooth, smoothstep } from '../sim/math.ts';
 import { hash01 } from '../sim/rng.ts';
 import type { World } from '../sim/World.ts';
-import { createPreyMaterial, type PreyUniforms } from './preyMaterial';
+import { createPreyMaterial } from './preyMaterial';
 
 /** What the body renderers need for one frame. */
 export interface BodyFrame {
@@ -15,10 +15,20 @@ export interface BodyFrame {
   /** Game seconds since the last frame, and since the renderers started (spin and tail animation). */
   dt: number;
   time: number;
-  /** The rendered local hole: the approach stretch and the shader's hole uniform follow it. */
-  readonly hole: { readonly position: THREE.Vector3; readonly radius: number };
+  /**
+   * The holes that can eat, as drawn this frame (the local one first): bodies stretch toward the nearest one that can
+   * swallow them, and the shader winds a body around the hole it stretches toward or falls into.
+   */
+  readonly holes: readonly DrawnHole[];
   /** What the camera sees on the play plane (see GameCamera.groundView). */
   readonly view: GroundView;
+}
+
+/** A hole as drawn this frame (centre and gameplay radius). */
+export interface DrawnHole {
+  x: number;
+  z: number;
+  radius: number;
 }
 
 /**
@@ -89,14 +99,12 @@ export class PreyMesh {
   count = 0;
   /** Per instance: direction from the hole (x, z), stretch factor, curl. */
   private readonly stretchAttr: THREE.InstancedBufferAttribute;
+  /** Per instance: the hole it stretches toward (x, z) and that hole's core radius. */
+  private readonly holeAttr: THREE.InstancedBufferAttribute;
   /** Per instance: tidal heating glow 0..1. */
   private readonly glowAttr: THREE.InstancedBufferAttribute;
   /** Per instance: heat of the body itself 0..1 (shed debris). */
   private readonly heatAttr: THREE.InstancedBufferAttribute;
-  private readonly uniforms: PreyUniforms;
-  private holeX = 0;
-  private holeZ = 0;
-  private holeRadius = 1;
 
   constructor(capacity: number, shape: PreyShape = 'rock') {
     this.capacity = capacity;
@@ -104,17 +112,18 @@ export class PreyMesh {
     const geometry = shape === 'sphere' ? createSphereGeometry() : createRockGeometry(detail);
     this.stretchAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 4), 4);
     this.stretchAttr.setUsage(THREE.DynamicDrawUsage);
+    this.holeAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+    this.holeAttr.setUsage(THREE.DynamicDrawUsage);
     this.glowAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
     this.glowAttr.setUsage(THREE.DynamicDrawUsage);
     this.heatAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity), 1);
     this.heatAttr.setUsage(THREE.DynamicDrawUsage);
     geometry.setAttribute('aStretch', this.stretchAttr);
+    geometry.setAttribute('aHole', this.holeAttr);
     geometry.setAttribute('aGlow', this.glowAttr);
     geometry.setAttribute('aHeat', this.heatAttr);
 
-    const { material, uniforms } = createPreyMaterial(shape === 'sphere');
-    this.uniforms = uniforms;
-    this.mesh = new THREE.InstancedMesh(geometry, material, capacity);
+    this.mesh = new THREE.InstancedMesh(geometry, createPreyMaterial(shape === 'sphere'), capacity);
     this.mesh.frustumCulled = false;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     // Per-instance colour from the start, so the shader never recompiles when the first body is drawn.
@@ -127,14 +136,9 @@ export class PreyMesh {
     return this.count >= this.capacity;
   }
 
-  /** Start a frame: no instances yet; the approach stretch and the shader follow the frame's hole. */
-  begin(frame: BodyFrame): void {
+  /** Start a frame: no instances yet. */
+  begin(): void {
     this.count = 0;
-    const { position, radius } = frame.hole;
-    this.holeX = position.x;
-    this.holeZ = position.z;
-    this.holeRadius = radius;
-    this.uniforms.uHole.value.set(position.x, position.z, radius);
   }
 
   /**
@@ -150,6 +154,7 @@ export class PreyMesh {
     let curl = 0;
     let glow = 0;
     const attr = this.stretchAttr.array as Float32Array;
+    const hAttr = this.holeAttr.array as Float32Array;
 
     if (obj.state === 'eating') {
       // Infall: the distance to the hole shrinks slowly then plunges, while the object swings around the hole with
@@ -162,6 +167,7 @@ export class PreyMesh {
       eaterPosition(frame, obj, tmpPos).addScaledVector(tmpOffset, 1 - fall);
       const eater = frame.world.hole(obj.eaterId);
       const er = eater ? eater.radius : obj.radius;
+      setHole(hAttr, i, tmpPos.x - tmpOffset.x * (1 - fall), tmpPos.z - tmpOffset.z * (1 - fall), er);
       const from = approachStretch((Math.hypot(obj.eatOffset.x, obj.eatOffset.z) - er - obj.radius) / er, obj.radius, er);
       const build = 1 - (1 - t) * (1 - t);
       stretch = lerp(from, 1 + (SPAGHETTI.maxStretch - 1) * obj.infallWeight, build);
@@ -170,12 +176,32 @@ export class PreyMesh {
       scale *= 1 - smoothstep(SPAGHETTI.drainStart, 1, t);
     } else {
       tmpPos.set(lerp(obj.prevX, obj.position.x, frame.alpha), 0, lerp(obj.prevZ, obj.position.z, frame.alpha));
-      const hr = this.holeRadius;
-      const dx = tmpPos.x - this.holeX;
-      const dz = tmpPos.z - this.holeZ;
-      setDirection(attr, i, dx, dz);
-      // Tidal stretch on approach, for edible objects only.
-      if (canSwallow(obj.radius, hr)) stretch = approachStretch((Math.sqrt(dx * dx + dz * dz) - hr - obj.radius) / hr, obj.radius, hr);
+      // Tidal stretch on approach, for edible objects only: toward the nearest hole that can swallow it.
+      const holes = frame.holes;
+      let best: DrawnHole | null = null;
+      let bestGap = Infinity;
+      for (let h = 0; h < holes.length; h++) {
+        const hole = holes[h];
+        if (!canSwallow(obj.radius, hole.radius)) continue;
+        const dx = tmpPos.x - hole.x;
+        const dz = tmpPos.z - hole.z;
+        const dist = Math.sqrt(dx * dx + dz * dz);
+        const gap = (dist - hole.radius - obj.radius) / hole.radius;
+        if (gap < bestGap) {
+          bestGap = gap;
+          best = hole;
+        }
+      }
+      if (best && bestGap < SPAGHETTI.onsetGap) {
+        setDirection(attr, i, tmpPos.x - best.x, tmpPos.z - best.z);
+        stretch = approachStretch(bestGap, obj.radius, best.radius);
+        setHole(hAttr, i, best.x, best.z, best.radius);
+      } else {
+        // Nothing to stretch toward: any hole will do for the shader (it is only used when the stretch is not 1).
+        const any = holes.length > 0 ? holes[0] : null;
+        setDirection(attr, i, 1, 0);
+        setHole(hAttr, i, any ? any.x : 0, any ? any.z : 0, any ? any.radius : 1);
+      }
     }
 
     attr[i * 4 + 2] = stretch;
@@ -211,6 +237,7 @@ export class PreyMesh {
     color.needsUpdate = true;
     for (const [attr, size] of [
       [this.stretchAttr, 4],
+      [this.holeAttr, 3],
       [this.glowAttr, 1],
       [this.heatAttr, 1],
     ] as const) {
@@ -219,6 +246,12 @@ export class PreyMesh {
       attr.needsUpdate = true;
     }
   }
+}
+
+function setHole(attr: Float32Array, i: number, x: number, z: number, radius: number): void {
+  attr[i * 3] = x;
+  attr[i * 3 + 1] = z;
+  attr[i * 3 + 2] = radius;
 }
 
 /** The unit direction from the hole to the object (any direction when they are on top of each other). */

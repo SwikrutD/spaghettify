@@ -60,7 +60,7 @@ test('a tiny starving hole evaporates on time, its life ends with one died event
   hole.input.x = 1;
   const events = run(world, HUNGER.evaporateTime + 0.5, () => holdComets(world));
   assert.equal(hole.phase, 'over');
-  assert.deepEqual(events.filter((e) => e.type === 'died'), [{ type: 'died', hole: hole.id }]);
+  assert.deepEqual(events.filter((e) => e.type === 'died'), [{ type: 'died', hole: hole.id, cause: 'evaporated', by: -1, byName: '' }]);
   assert.equal(body.state, 'alive');
   assert.equal(hole.eatenCount, 0);
   assert.ok(Math.abs(hole.velocity.x) < 1e-9);

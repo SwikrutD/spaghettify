@@ -75,7 +75,7 @@ export class PreyFieldMesh {
 
   update(frame: BodyFrame): void {
     this.frame = frame;
-    for (const m of this.meshes) m.begin(frame);
+    for (const m of this.meshes) m.begin();
     this.drawnMesh.fill(-1);
     const { x, z, radius, unitsPerPixel } = frame.view;
     const minRadius = PREY.drawMinPixels * unitsPerPixel;

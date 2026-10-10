@@ -84,6 +84,13 @@ export function digest(world: World): string {
     rng: world.rng.state,
     holes: world.holes.map((h) => ({
       id: h.id,
+      name: h.name,
+      gen: h.gen,
+      protection: h.protection,
+      eatenBy: h.eatenBy,
+      holesEaten: h.holesEaten,
+      brain: h.bot,
+      input: h.input,
       position: h.position,
       velocity: h.velocity,
       pull: h.pull,

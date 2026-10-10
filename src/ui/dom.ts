@@ -45,3 +45,8 @@ export function button(text: string, testid: string, primary = false): HTMLButto
 export function show(el: HTMLElement, visible: boolean): void {
   el.style.display = visible ? 'flex' : 'none';
 }
+
+/** Text made safe to put inside innerHTML (nicknames come from players). */
+export function escapeHtml(text: string): string {
+  return text.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+}

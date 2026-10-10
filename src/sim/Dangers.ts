@@ -1,10 +1,27 @@
-import { COMETS, DANGER, PLAYER, PREY } from '../config/index.ts';
+import { COMETS, DANGER, PREY } from '../config/index.ts';
 import { clampToArena, edgePush } from './arena.ts';
 import { canSwallow, createBody, type Body } from './body.ts';
-import { topSpeed, type Hole } from './Hole.ts';
+import { responsiveness, topSpeed, type Hole } from './Hole.ts';
 import type { Grain, GrainVisitor } from './MatterField.ts';
 import { vec2 } from './vec.ts';
 import type { World } from './World.ts';
+
+/**
+ * Pull of a body of radius `br` on a hole of radius `holeRadius` at distance `dist`, as a fraction of the hole's
+ * steering authority: zero unless the body is at least DANGER.pullMinRatio times the hole, ramping up to full
+ * strength at pullFullRatio, falling off as (br / dist) ^ pullFalloff and fading to zero at pullReach body radii.
+ */
+export function bodyPull(br: number, holeRadius: number, dist: number): number {
+  const ratio = br / holeRadius;
+  if (ratio < DANGER.pullMinRatio) return 0;
+  const reach = br * DANGER.pullReach;
+  const distSq = dist * dist;
+  if (distSq >= reach * reach) return 0;
+  const size = Math.min(1, (ratio - DANGER.pullMinRatio) / (DANGER.pullFullRatio - DANGER.pullMinRatio));
+  const falloff = Math.pow(br / Math.max(dist, br), DANGER.pullFalloff);
+  const edge = 1 - distSq / (reach * reach);
+  return DANGER.pullStrength * size * falloff * edge * edge;
+}
 
 /**
  * Big things are dangerous. Bodies and grains a hole cannot eat pull it toward them (falling off with distance,
@@ -54,10 +71,10 @@ export class Dangers {
   private updateHole(hole: Hole, dt: number): void {
     hole.invulnerable = Math.max(0, hole.invulnerable - dt);
     const speed = topSpeed(hole.radius);
-    const authority = PLAYER.responsiveness * speed;
+    const authority = responsiveness(hole.radius) * speed;
     edgePush(hole.position.x, hole.position.z, hole.radius, authority, this.edge);
     // A life that is over is out of the game: nothing pulls or hits it (the edge still holds it in).
-    if (!this.enabled || hole.phase === 'over') {
+    if (!this.enabled || hole.absent) {
       hole.pull.x = this.edge.x;
       hole.pull.z = this.edge.z;
       return;
@@ -118,18 +135,12 @@ export class Dangers {
   /** Add the pull of a body of radius `br` at (bx, bz) on the current hole, if it is big enough and near enough. */
   private addPull(bx: number, bz: number, br: number): void {
     const hole = this.hole!;
-    const ratio = br / hole.radius;
-    if (ratio < DANGER.pullMinRatio) return;
     const dx = bx - hole.position.x;
     const dz = bz - hole.position.z;
-    const reach = br * DANGER.pullReach;
     const distSq = dx * dx + dz * dz;
-    if (distSq >= reach * reach || distSq < 1e-8) return;
+    if (distSq < 1e-8) return;
     const dist = Math.sqrt(distSq);
-    const size = Math.min(1, (ratio - DANGER.pullMinRatio) / (DANGER.pullFullRatio - DANGER.pullMinRatio));
-    const falloff = Math.pow(br / Math.max(dist, br), DANGER.pullFalloff);
-    const edge = 1 - distSq / (reach * reach);
-    const a = (DANGER.pullStrength * this.authority * size * falloff * edge * edge) / dist;
+    const a = (bodyPull(br, hole.radius, dist) * this.authority) / dist;
     this.ax += dx * a;
     this.az += dz * a;
   }

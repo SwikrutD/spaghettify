@@ -1,3 +1,4 @@
+import { escapeHtml } from './dom';
 import { LeaderboardPanel } from './LeaderboardPanel';
 import { ladderLine } from './milestones';
 
@@ -5,11 +6,15 @@ export interface RunStats {
   score: number;
   best: number;
   newBest: boolean;
-  biggest: { name: string } | null;
+  biggest: { name: string; hole?: boolean } | null;
   /** Highest size milestone reached (1-based) and its title. */
   milestoneNumber: number;
   milestoneTitle: string;
   eatenCount: number;
+  /** Other holes swallowed this life. */
+  holesEaten: number;
+  /** Nickname of the hole that ate this one, or null if it evaporated. */
+  eatenBy: string | null;
   seconds: number;
 }
 
@@ -104,13 +109,16 @@ export class ScoreScreen {
     const secs = String(Math.floor(stats.seconds % 60)).padStart(2, '0');
     const best = stats.newBest ? 'NEW BEST' : `BEST ${stats.best.toLocaleString('en-US')}`;
     this.body.innerHTML =
-      `<div style="font-size:14px;letter-spacing:0.4em;opacity:0.7">YOU EVAPORATED</div>` +
+      (stats.eatenBy === null
+        ? `<div data-testid="cause" style="font-size:14px;letter-spacing:0.4em;opacity:0.7">YOU EVAPORATED</div>`
+        : `<div data-testid="cause" style="font-size:14px;letter-spacing:0.3em;opacity:0.9;text-transform:uppercase">Eaten by <span style="color:#ff9d8a;font-weight:700;letter-spacing:0.1em;font-size:18px;text-transform:none">${escapeHtml(stats.eatenBy)}</span></div>`) +
       `<div data-testid="score" style="font-size:clamp(44px,10vw,88px);font-weight:700;margin:8px 0 0">${stats.score.toLocaleString('en-US')}</div>` +
       `<div style="font-size:14px;letter-spacing:0.3em;opacity:0.7">${best}</div>` +
-      `<div data-testid="ladder" style="font-size:clamp(22px,4vw,34px);margin:28px 0 20px;text-shadow:0 0 24px rgba(255,190,120,0.8)">${ladderLine(stats.biggest)}</div>` +
+      `<div data-testid="ladder" style="font-size:clamp(22px,4vw,34px);margin:28px 0 20px;text-shadow:0 0 24px rgba(255,190,120,0.8)">${escapeHtml(ladderLine(stats.biggest))}</div>` +
       `<div style="display:inline-block;min-width:260px;font-size:16px;text-align:left" data-testid="stats">` +
       row('Size reached', stats.milestoneTitle) +
       row('Objects eaten', String(stats.eatenCount)) +
+      (stats.holesEaten > 0 ? row('Holes eaten', String(stats.holesEaten)) : '') +
       row('Time', `${mins}:${secs}`) +
       `</div>`;
     this.status.textContent = '';

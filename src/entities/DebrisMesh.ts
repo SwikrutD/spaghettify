@@ -18,7 +18,7 @@ export class DebrisMesh {
   }
 
   update(frame: BodyFrame): void {
-    this.mesh.begin(frame);
+    this.mesh.begin();
     for (const frag of this.field.objects) if (frag.active) this.mesh.add(frag, frame, frag.heat);
     this.mesh.end();
   }

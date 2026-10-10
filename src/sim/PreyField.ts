@@ -215,7 +215,7 @@ export class PreyField {
   private holeClearance(x: number, z: number, r: number, initial: boolean): number {
     let best = Infinity;
     for (const hole of this.world.holes) {
-      if (hole.phase === 'over') continue;
+      if (hole.absent) continue;
       let need = canSwallow(r, hole.radius) ? hole.radius + r * 1.5 : r * DANGER.pullReach + hole.radius * 2;
       if (!initial) need = Math.max(need, ARENA.holeClearViews * viewDistance(hole.radius) + r);
       const spare = Math.hypot(x - hole.position.x, z - hole.position.z) - need;

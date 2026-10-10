@@ -1,8 +1,9 @@
-import { HUNGER } from '../config/index.ts';
+import { HOLES, HUNGER } from '../config/index.ts';
 import { smoothstep } from './math.ts';
 import type { Hole } from './Hole.ts';
 
-export type RunPhase = 'playing' | 'evaporating' | 'over';
+/** 'eaten': being swallowed by another hole (spaghettifying into it); the life is over when that finishes. */
+export type RunPhase = 'playing' | 'evaporating' | 'eaten' | 'over';
 
 /** Fraction of a hole's mass Hawking radiation takes per second at this radius, fed or not: bigger holes decay faster. */
 export function hawkingRate(radius: number): number {
@@ -49,9 +50,24 @@ export class Hunger {
     this.endTimer = 0;
   }
 
+  /** Another hole swallowed this one: it spaghettifies into it for HOLES.infallTime seconds, then the life is over. */
+  beEaten(): void {
+    this.phase = 'eaten';
+    this.endTimer = 0;
+    this.level = 0;
+    this.hole.eatProgress = 0;
+  }
+
   update(dt: number): void {
     const hole = this.hole;
     if (this.phase === 'over') return;
+
+    if (this.phase === 'eaten') {
+      this.endTimer += dt;
+      hole.eatProgress = Math.min(1, this.endTimer / HOLES.infallTime);
+      if (hole.eatProgress >= 1) this.phase = 'over';
+      return;
+    }
 
     if (this.phase === 'evaporating') {
       this.level = 1;
