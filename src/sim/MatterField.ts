@@ -223,13 +223,26 @@ export class MatterField {
     const r0 = layer.col(z - grow);
     const r1 = layer.col(z + grow);
     const g = this.scratch;
+    // A grain's centre lies in its slot's square (span wide): a square farther than `grow` cannot hold one in reach,
+    // so it is skipped before the grain is worked out (the hash is most of the cost). The slack keeps it exact.
+    const grid = layer.def.grid;
+    const sub = layer.sub;
+    const span = sub - 2 * layer.margin;
+    const far = grow * grow * (1 + 1e-9) + 1e-9;
     for (let row = r0; row <= r1; row++) {
+      const rowZ = -ARENA.radius + row * layer.def.cell + layer.margin;
       for (let col = c0; col <= c1; col++) {
         const cell = row * layer.cols + col;
         const live = this.presentIn(layer, cell) & ~layer.taken[cell];
         if (live === 0) continue;
+        const colX = -ARENA.radius + col * layer.def.cell + layer.margin;
         for (let slot = 0; slot < layer.slots; slot++) {
           if ((live & (1 << slot)) === 0) continue;
+          const sx = colX + (slot % grid) * sub;
+          const sz = rowZ + Math.floor(slot / grid) * sub;
+          const ex = x < sx ? sx - x : x > sx + span ? x - sx - span : 0;
+          const ez = z < sz ? sz - z : z > sz + span ? z - sz - span : 0;
+          if (ex * ex + ez * ez > far) continue;
           this.grain(layer, cell, slot, g);
           const dx = g.x - x;
           const dz = g.z - z;

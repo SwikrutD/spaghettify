@@ -25,10 +25,17 @@ What the api does:
 - `POST /api/scores`, `GET /api/scores/top`, `GET /api/scores/rank?score=n`, `GET /api/online` (players and
   rooms), `GET /api/health`, all `no-store`.
 - The online arena on the WebSocket `/ws`: up to 8 rooms of 12 holes (bots fill what players do not), one
-  simulation step 60 times a second per room and a snapshot of what is near each player 20 times a second
-  (about 2 KB/s per player; a full room is a few percent of one CPU core). Lives played online are scored by
-  the server and posted to the board under the player's nickname. Limits per connection and per IP are in
-  `NET.limits` (`src/config/net.ts`).
+  simulation step 60 times a second per room and a snapshot of what is near each player 20 times a second.
+  Lives played online are scored by the server and posted to the board under the player's nickname. Limits
+  per connection and per IP are in `NET.limits` (`src/config/net.ts`).
+- What it costs (M21 load test, `npm run load`): every room runs on the one Node thread. A full room of 12
+  players is about 4 to 5 percent of one i7-8700K core with its sockets (about 6 percent of the TrueNAS
+  i3-6100), so 8 full rooms (96 players) take about half of one i3 core; Caddy proxying their WebSockets
+  takes about as much again on the other threads. Memory: about 5 MB per room, the api stays under
+  200 MB. Upload: about 2 KB/s of game data per player (up to about 10 KB/s for a player who has grown
+  huge), about 3.5 KB/s on the wire with TCP, TLS and WebSocket framing: 96 players need about 3 Mbit/s
+  of upload. No new room opens while the rooms use more than 75 percent of a core (`NET.rooms.maxLoad`).
+  `/api/online` reports that share as `load`.
 - Light anti-cheat: 6 score submissions and 120 requests per minute per client IP, score sanity caps from
   the run time and the size milestones, a nickname filter (shared rules in `src/leaderboard/rules.ts`).
 - The client IP is taken from `X-Forwarded-For` only through proxies on private addresses (Caddy,
@@ -163,7 +170,7 @@ curl -sI -H "Accept-Encoding: br" https://spaghettify.swikrut.com/assets/<file>.
 ```
 curl -s https://spaghettify.swikrut.com/api/health                              # {"ok":true}
 curl -s https://spaghettify.swikrut.com/api/scores/top                          # {"entries":[...],"total":n}
-curl -s https://spaghettify.swikrut.com/api/online                              # {"players":n,"rooms":n}
+curl -s https://spaghettify.swikrut.com/api/online                              # {"players":n,"rooms":n,"load":x}
 curl -si -H "Connection: Upgrade" -H "Upgrade: websocket" -H "Sec-WebSocket-Version: 13" \
   -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" https://spaghettify.swikrut.com/ws | head -1   # 101 Switching Protocols
 ```
@@ -176,6 +183,13 @@ and play at the same time: both land in the same room. Check Umami's Realtime vi
 `run-start` event. Set a nickname on the title screen and play a life: the score screen shows your rank and
 the board (online the server posts the life itself).
 Open `/?perf` on a phone to see the frame time and the quality level it settles on.
+
+**Load.** `load` in `/api/online` is the share of one CPU core the rooms took over the last 5 seconds
+(0.05 is 5 percent). With players on, check it now and then, and `docker stats` for the two containers. On
+the PC, `npm run load -- sim` measures a room's cost without sockets and `npm run load -- ws` runs headless
+clients against a server (`--url ws://localhost:8095/ws` for the Docker stack; each client sends a made-up
+`X-Forwarded-For`, which counts because it comes from a private address, so the per-IP limits do not refuse
+them).
 
 ## Updating
 

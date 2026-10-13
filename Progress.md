@@ -3,25 +3,26 @@
 ## Next session
 Direction (2026-10-09, see Decisions): an endless drop-in arena with bot black holes and online players that eat each other (hole.io / slither.io). CLAUDE.md is updated.
 
-Last: M20 arena leaderboard, share and analytics, done 2026-10-13 (see Done). Nobody has played the arena online yet: a human session on two devices (ideally a phone on mobile data) and the M17 offline arena playtest are still owed, and M21 should start from their notes if they exist.
+Last: M21 load test, deploy check and share card, done 2026-10-13 (see Done). The game is ready to go live: the user deploys it to TrueNAS (deploy/DEPLOY.md, sections 1 to 4) and plays it online on two devices, one of them a phone on mobile data. Nobody has played the arena (offline or online) since M17; every arena number is still untested by hand.
 
-Recap of M20:
-- Done: holes eaten now score (500 points each, `HOLES.scorePerHole`) on the server and offline; the board marks runs posted by an offline arena; the score screen has an Arena row; the share card and share text carry the holes swallowed, who ate you and the arena; analytics `join` plus `holes` on `run-end`. `npm run typecheck`, `npm run lint` and `npm test` pass (52 sim tests, 33 server tests, 36 Playwright tests).
-- Known bugs and open questions: the share card layout was not looked at by eye; the live HUD board now includes the hole bonus (it jumps by 500 on a kill); see Known bugs.
-- Next segment: M21 Load test, deploy and playtest polish.
-- Recommended model and effort: Opus 5.5 at high (as in the milestone list: measurement, CPU and bandwidth tuning, deploy). No change.
-- How to start it: run `/clear`, then `/model` and pick Opus 5.5 with high effort, then paste the start prompt below.
+Recap of M21:
+- Done: `npm run load` (server/scripts/loadtest.ts) measures rooms in process (`sim`) and over real WebSockets (`ws`, optionally through the Docker stack); the numbers are in Done below. NET.rooms stays at 8 rooms of 12 players (about half of one i3-6100 core when all 96 slots are full) with a new load guard (no new room above 75 percent of a core; `load` in /api/online). Two exact sim speed-ups (bodies at rest skip the separation and the grid rebuild; field queries skip slot squares out of reach) cut a room's step cost by about a quarter; prey bodies are resent only after moving 1 percent of their radius (a big hole's bandwidth dropped by about a quarter). Both Docker images build and `docker compose up` serves the game, /api and /ws through Caddy (two browsers played online through it). Share card looked at on a real GPU; a long "eaten by" line now shrinks its font. `npm run typecheck`, `npm run lint` and `npm test` pass (53 sim, 34 server, 36 Playwright tests).
+- Known bugs and open questions: no playtest notes yet, so no tuning was done; not deployed to TrueNAS from here (no access); see Known bugs (M21).
+- Next segment: M22 Playtest tuning, once the user has deployed and played (online on a phone and a desktop, and the offline arena). Without notes there is nothing to tune: deploy and play first.
+- Recommended model and effort: Sonnet 5.5 at high (gameplay numbers in config). Opus 5.5 at high if the notes are about netcode feel or phone performance.
+- How to start it: deploy and play first (DEPLOY.md) and write down what felt off. Then run `/clear`, then `/model` and pick the model and effort above, then paste the start prompt below with the notes filled in.
 
-Start prompt for M21:
+Start prompt for M22:
 
 ```
-Start Milestone 21 (load test, deploy and playtest polish) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 22 (playtest tuning) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: measure bandwidth and CPU per room with simulated clients (server/test/helpers.ts has a Mirror and the ws tests have headless clients), set the room limits in NET for the TrueNAS box, make sure the Docker images build and docker compose up serves the game, /api and /ws through Caddy, and apply any tuning from playtest notes the user gives you. Look at the share card by eye once (a scratch Playwright run on a real GPU is fine).
+Goal: apply the tuning from my playtest notes below (numbers in src/config, small feel fixes) and fix any bugs the notes show. Keep the sim deterministic and the server and client on the same rules (any shared config change changes the rules hash, which is fine for a deploy).
 
-Done when: npm run typecheck, npm run lint and npm test pass; the measured numbers and chosen limits are in Progress.md; the work is committed.
+My playtest notes:
+<paste notes here: device, online or offline, what felt off>
 
-Known from M20: the board schema got holes and offline columns (existing SQLite files migrate on start); the rules hash covers HOLES, so a client and server of different builds refuse each other.
+Done when: npm run typecheck, npm run lint and npm test pass (sim, server and Playwright); the Docker images build; Progress.md records what changed and why; the work is committed.
 ```
 
 ## Milestones
@@ -39,7 +40,8 @@ Phase 2, multiplayer arena (in order):
 - [x] M18 Multiplayer server (2026-10-10) [Opus 5.5, xhigh]: WebSocket endpoint on the existing Fastify server (`server/`), rooms that each run a `src/sim` World (its fixed 60 Hz step; snapshots at 20 Hz), quick play joins the fullest room with space, bots fill each room to the target population and step aside as humans join, compact binary snapshots with interest management (only what is near each client), input messages with sequence numbers, per-connection rate limits, nickname filter on join, server-scored lives. Caddy proxies the WebSocket path. Tests: sim-level room tests and headless WebSocket clients joining, moving and eating each other.
 - [x] M19 Netcode client (2026-10-10) [Opus 5.5, xhigh]: connect from the title screen, client-side prediction of the own hole with server reconciliation, interpolation buffer for everything else, smooth corrections, ping and connection state UI, players online on the title, automatic fallback to the offline arena when the server is unreachable or drops. Online pause becomes a menu over a running arena. Playwright: two browser clients against the real server see each other and one eats the other; server down falls back offline.
 - [x] M20 Arena leaderboard, share and analytics (2026-10-13): server-scored online lives on the board, offline lives keep the caps and are marked offline, score = peak mass points plus 500 per hole eaten, "You ate <nickname>" and the holes on the score screen and share card, analytics join, holes and online.
-- [ ] M21 Load test, deploy and playtest polish [Opus 5.5, high]: bandwidth and CPU per room measured with simulated clients, room limits set for the TrueNAS box, deploy, phone playtest, tuning from notes.
+- [x] M21 Load test and deploy check (2026-10-13): bandwidth and CPU per room measured with simulated clients, room limits set for the TrueNAS box (i3-6100), the Docker stack checked end to end, share card looked at. The deploy to TrueNAS and the phone playtest are the user's (no tuning without notes).
+- [ ] M22 Playtest tuning [Sonnet 5.5, high; Opus 5.5 high for netcode or phone performance]: tuning and fixes from the user's notes after deploying and playing online and offline.
 - [ ] Later (not committed): private room codes, stars and a galaxy core as bigger bodies, power-ups, daily events, disk cosmetics.
 
 ## Done
@@ -120,6 +122,15 @@ Phase 2, multiplayer arena (in order):
   - Analytics: `join` {online, why, from}, `holes` added to `run-end` (which already carried `online` and `cause`); `run-start` and `net-drop` already carried `online` and `carried`. DEPLOY.md lists them.
   - Tests: sim (score and live points with a hole kill), server (caps with holes, old body shape, the board marks offline and holes), Playwright (Arena row and the bonus offline, Arena row online).
 
+- 2026-10-13 M21: load test, room limits, deploy check, share card.
+  - `npm run load` (`server/scripts/loadtest.ts`, not part of `npm test`): `sim` steps rooms in process as fast as they go (players flown by the bots' own brain, so they feed, hunt, die and play again; `--radius` starts every life big), `ws` runs headless WebSocket clients (input 30 a second, pings, Play again) against a server in a child process (CPU, event loop delay, memory, rooms load; it flies the players with the bot brain too) or `--url` (the Docker stack). Each client sends its own made-up X-Forwarded-For so the per-IP limits see separate players.
+  - Measured on the desktop (i7-8700K; the TrueNAS box is an i3-6100, 2 cores 4 threads at 3.7 GHz, 16 GB, HDD, about 1.35 times slower per core): a full room of 12 flown players in process costs about 2 percent of a core after the speed-ups below (2.5 before), its worst second about 5 percent, its worst single step 3 to 8 ms; memory about 4.6 MB a room. Over real sockets in a Linux container: 8 full rooms (96 clients) take 35 percent of one core (the sockets are about half of it), event loop delay p99 7.7 ms and max 14 ms, rss 175 MB, snapshot gaps p99 55 ms. Through Caddy on the compose network: api 31 percent and Caddy 37 percent (spread over threads) for 96 clients. Bandwidth: 1.8 to 2.3 KB/s of game data per player (about 3.5 KB/s on the wire with framing); holes of radius 50 to 120 get 8.5 to 9.6 KB/s mean and 18 KB/s at most (12 to 13 and 33 before). On Windows the 5 ms room timer fires every 15.6 ms (timer resolution), so local snapshot gaps there are 31 to 63 ms; Linux is fine.
+  - Limits: `NET.rooms` unchanged (population 12, 12 players, 8 rooms): 96 players are about half of one i3 core for the api plus about as much for Caddy on the other threads, and about 3 Mbit/s of upload. New guard: `NET.rooms.maxLoad` 0.75 over `loadSeconds` 5: `Rooms.load` is the share of real time spent in the rooms' tick; above it quick play opens no new room (rooms with space still take players). `/api/online` returns `load`.
+  - Speed-ups (exact: a seeded load run sends the same bytes before and after): `PreyField.rebuild` skips the grid rebuild when no body moved, came or went since the last one, and the separation pass is skipped while nothing changed since a pass that pushed nothing (a sim test runs a world that always does both side by side for 20 s and checks they stay identical, and that a body moved by hand is still pushed off another). `MatterField.forEach` skips a slot whose square is out of reach before hashing its grain.
+  - Bandwidth: a prey body is resent once it has moved `NET.interest.preyMoveTolerance` (1 percent) of its radius since it was last sent (was 0.1 percent): bodies settling after a respawn made up most of a big hole's snapshots.
+  - Deploy: both images build; `docker compose up` serves the game (index no-cache, assets immutable with brotli), `/api/health`, `/api/scores/top` (an M18-era volume migrated: the holes and offline columns are there) and `/ws`; two real-GPU browsers played online through Caddy (ONLINE, 2 players, no console errors). Not deployed to TrueNAS from here.
+  - Share card: looked at on a real GPU (eaten by a bot after eating one: the photo of the merger, the arena tag, the holes line). The arena line now shrinks its font to fit instead of squeezing letters (a 16 letter nickname fits), and the objects count has thousands separators.
+
 ## In progress
 (nothing)
 
@@ -172,8 +183,11 @@ Phase 2, multiplayer arena (in order):
 
 - 2026-10-13: M20: every hole swallowed adds 500 points to the score (the same on the server and offline). The mass it brings already counts toward the peak, but a kill while shrinking from decay might not raise the peak, and hunting is the point of the arena; 500 is small next to a giant's score and matters for small holes. The cap allows a hole every 2 s. Offline lives stay on the board, marked offline, rather than being kept off it: a player without a server still gets a score, and the mark keeps it honest.
 
+- 2026-10-13: M21: room limits stay at 8 rooms of 12 players for the i3-6100. All rooms share one Node thread; 96 players measure about half of one i3 core plus Caddy's share, which leaves room for spikes (rooms full of giants cost about twice as much) and for whatever else the NAS runs. A load guard (no new room above 75 percent of a core) covers a busy box instead of a lower fixed limit. Worker threads per room were not needed at this size.
+- 2026-10-13: M21: prey bodies are resent after moving 1 percent of their radius rather than 0.1 percent: a drawing error of 1 percent is invisible, and the client only draws bodies (pull and contacts come from the server).
+
 ## Known bugs
-- Share card (M20): the new lines (holes, eaten by, arena tag) were checked by code only, not by eye. A long nickname in "eaten by" is shrunk by the canvas, not wrapped.
+- Share card: looked at on a real GPU in M21 (offline, eaten by a bot). It does not show the player's own nickname (so far by design). Not seen on a phone or after an online life.
 - Score (M20): the live HUD points jump by 500 when a hole is swallowed. The best score on the title is per device and mixes online and offline lives.
 - Leaderboard: anyone can post under someone else's nickname; the best run wins either way. No admin UI (DEPLOY.md has a one-line delete). The nickname filter is English-centric and small. Quitting a run from the pause menu does not post it.
 - Leaderboard: the caps were checked against test runs only, not real long runs. If a real run is rejected as implausible, `docker logs spaghettify-api` shows it; loosen `LEADERBOARD.maxMealsPerSecond`.
@@ -216,7 +230,7 @@ Phase 2, multiplayer arena (in order):
 - At full heat the dim outer disk reads slightly muddy brown; tune `outerSoftness`, `colorSaturation` or `tempIntensityPower` by eye.
 - Deploy: not yet live. Umami `websiteId` is empty (analytics off) until the user fills it in; the subdomain is assumed to be `spaghettify.swikrut.com`. Not verified behind Cloudflare. Meta description and og tags added in M10; no og:image.
 - Server (M18): a player's hole leaves the arena the moment the socket closes, so other players see it vanish (no fade, no reconnect grace). A hole that leaves can still be the eater of falling bodies or of a swallowed hole: the client draws them finishing their fall in place.
-- Server (M18): the join timeout, the ping drop and the idle close (10, 15 and 300 s timers) are not covered by automated tests. Not measured on the TrueNAS box or over a real network (M21): only simulated clients in one process and real sockets on localhost.
+- Server (M18): the join timeout, the ping drop and the idle close (10, 15 and 300 s timers) are not covered by automated tests. Not measured on the TrueNAS box or over a real network: M21 load-tested simulated clients over real sockets on one machine (Docker and Caddy included).
 - Server (M18): Fastify logs that `disableRequestLogging` is deprecated (pre-existing, harmless until Fastify 6). Player nicknames can repeat in a room (bots avoid live names).
 
 - Netcode (M19): eating is not predicted: grains, bodies and comets the own hole passes over vanish about a round trip later (the fall starts where they lay, so it reads as pulled in). A bump or hit is the server's: it shows as a fast slide of about a round trip of knockback. Judge both in an online playtest.
@@ -225,6 +239,10 @@ Phase 2, multiplayer arena (in order):
 - Netcode (M19): a life carried offline after a drop is posted twice (the server's part on the drop, the whole life by the client at its end). The online part's debris and falling bodies do not come along.
 - Netcode (M19): the HUD board online is the server's as of up to a second ago (it comes once a second), so the own points lag the disk by that much.
 - Tests (M19): SwiftShader in the other workers' browsers can starve a normal priority Node process for seconds on Windows; the online spec raises its worker's priority, which needs no admin rights. If it ever fails at the join, look at `net.lastEnd` in the message.
+- Load (M21): in rooms full of giants (radius 50 to 120) a single step can take up to 20 ms on the desktop (about 27 ms on the i3), which delays every room's next snapshot by that much (other holes are drawn 100 ms behind, so it should not show). Measured with an artificial start size only.
+- Load (M21): Caddy spends about as much CPU proxying the WebSockets as the api spends running the rooms. If the box gets tight, a Cloudflare Tunnel rule could send `/ws` straight to the api container (not set up).
+- Server (M21): 6 connections per IP (`NET.limits.connectionsPerIp`) could refuse players behind one carrier-grade NAT (mobile data) once the game is popular. Watch for `busy` refusals.
+- Tests (M21): one full Playwright run right after stopping Docker failed "the player swallows a smaller hole" and "portrait screens get a horizontal FOV floor"; both passed alone and in two further full runs. Suspected machine load; look again if it recurs.
 ## Open questions
 - Audio mix: drone level, drone pitch range (`AUDIO.drone`) and eat pitch range are untested by ear. Check the drone is not tiring over a few minutes and that frequent eats at the start are not shrill.
 - Arena design numbers, now in config and untested by hand: holes per room (11 bots plus the player), the hole vs hole radius ratio 1.15 and cover 0.9, mass transfer 0.8, spawn protection 3 s, the speed curve (`speedExponent` 0.85) and agility (0.15), the bot character ranges, and whether the arena (radius 1200) is the right size for 12 holes (about a quarter of the time another hole is within one view distance; a hole eaten about every 12 s somewhere). Online room numbers (population 12, 12 players, 8 rooms) and the interest margins are in `NET` and untested with real players.
@@ -234,5 +252,5 @@ Phase 2, multiplayer arena (in order):
 - Not yet playtested on a phone (touch input exists since M7 part 3). The auto scaler handles render cost; check with `?perf`.
 - Danger feel: is the pull noticeable but fair, is a 22 percent shed with debris to win back too harsh or too soft, do comets need a warning? Tune `DANGER`, `COMETS` and the tier `comets` tables.
 - Lens strength is a taste call: `einsteinRadius` 4 puts the star ring just outside the heat-0 disk. Is the far-side lift of the disk (`planeEinsteinRadius`, `planeDepthRange`) too much or too little?
-- Should a disconnect leave the hole in the arena for a few seconds (a reconnect grace) instead of removing it at once? M19 carries a dropped life offline instead; a grace (and a resume token) would let the client rejoin its own hole. Decide after an online playtest (M21).
+- Should a disconnect leave the hole in the arena for a few seconds (a reconnect grace) instead of removing it at once? M19 carries a dropped life offline instead; a grace (and a resume token) would let the client rejoin its own hole. Decide after an online playtest (M22).
 - Online feel numbers in `NET_CLIENT`, set from the simulated link only: 100 ms interpolation delay, 0.1 s correction fade and 0.3 view snap, 30 inputs a second, the 8 s stall.

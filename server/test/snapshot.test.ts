@@ -104,7 +104,7 @@ function checkMirror(room: Room, player: Player, link: TestLink): void {
       assert.equal(m.gen, body.gen);
       assert.equal(m.state, body.state);
       near(m.radius, body.radius, 1e-5 * body.radius, 'body radius');
-      if (pool.kind === BODY_KIND.prey) near(m.x, body.position.x, body.radius * 2e-3, 'body x');
+      if (pool.kind === BODY_KIND.prey) near(m.x, body.position.x, body.radius * (NET.interest.preyMoveTolerance + 1e-3), 'body x');
     });
   }
   // The field: every cell in every synced rectangle as the server has it.

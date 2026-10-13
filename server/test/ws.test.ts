@@ -92,8 +92,9 @@ test('two players in one room over real WebSockets: they move, see each other, o
     assert.notEqual(wa.hole, wb.hole);
     assert.equal(wa.seed, wb.seed);
     assert.equal(wa.tickRate, 60);
-    const online = (await (await fetch(`${http}/api/online`)).json()) as { players: number; rooms: number };
-    assert.deepEqual(online, { players: 2, rooms: 1 });
+    const online = (await (await fetch(`${http}/api/online`)).json()) as { players: number; rooms: number; load: number };
+    assert.deepEqual({ players: online.players, rooms: online.rooms }, { players: 2, rooms: 1 });
+    assert.ok(online.load >= 0 && online.load < 1, `load ${online.load}`);
 
     // Moving: the server steers each hole by its input and acks it.
     await a.until(() => a.snapshots.length > 0);

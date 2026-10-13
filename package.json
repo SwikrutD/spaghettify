@@ -13,6 +13,7 @@
     "test:sim": "node --disable-warning=ExperimentalWarning --test \"src/sim/test/**/*.test.ts\"",
     "test:server": "npm --prefix server test",
     "server": "npm --prefix server run dev",
+    "load": "npm --prefix server run load --",
     "perf": "playwright test -c perf/playwright.perf.config.ts"
   },
   "dependencies": {

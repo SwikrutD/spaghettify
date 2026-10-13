@@ -25,6 +25,15 @@ export class PreyField {
   private readonly covers: Float64Array;
   private readonly world: World;
   private readonly isAlive = (i: number) => this.objects[i].state === 'alive';
+  /**
+   * Each slot's place and whether it was alive at the last grid rebuild. Bodies sit still, so most steps nothing has
+   * changed: the rebuild is skipped then, and so is the separation once a pass found nothing to push apart.
+   */
+  private readonly lastX: Float64Array;
+  private readonly lastZ: Float64Array;
+  private readonly lastAlive: Uint8Array;
+  private built = false;
+  private settled = false;
 
   constructor(world: World) {
     this.world = world;
@@ -44,6 +53,9 @@ export class PreyField {
     this.found = new Int32Array(total);
     this.retryAt = new Float32Array(total);
     this.covers = new Float64Array(total * 3);
+    this.lastX = new Float64Array(total);
+    this.lastZ = new Float64Array(total);
+    this.lastAlive = new Uint8Array(total);
   }
 
   /** Bodies in play (alive or falling in); the rest wait to respawn. */
@@ -114,13 +126,40 @@ export class PreyField {
     }
   }
 
-  /** Re-sort the live bodies into the grid (after anything moved them). */
+  /** Re-sort the live bodies into the grid if anything moved them or a body came or went since the last time. */
   rebuild(): void {
+    if (this.built && !this.changed()) return;
     this.grid.rebuild(this.objects, this.isAlive);
+    const objects = this.objects;
+    for (let i = 0; i < objects.length; i++) {
+      this.lastAlive[i] = objects[i].state === 'alive' ? 1 : 0;
+      this.lastX[i] = objects[i].position.x;
+      this.lastZ[i] = objects[i].position.z;
+    }
+    this.built = true;
+    // Something moved (a respawn, a push, a test's hand): it may overlap another body.
+    this.settled = false;
   }
 
-  /** Push overlapping live bodies apart, the lighter one moving more. Neighbours come from the grid. */
+  /** True if a body moved, came or went since the last rebuild. */
+  private changed(): boolean {
+    const objects = this.objects;
+    for (let i = 0; i < objects.length; i++) {
+      const obj = objects[i];
+      const alive = obj.state === 'alive' ? 1 : 0;
+      if (alive !== this.lastAlive[i]) return true;
+      if (alive === 1 && (obj.position.x !== this.lastX[i] || obj.position.z !== this.lastZ[i])) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Push overlapping live bodies apart, the lighter one moving more. Neighbours come from the grid. Skipped while
+   * nothing changed since a pass that pushed nothing (the result would be the same).
+   */
   private separate(dt: number): void {
+    if (this.settled && !this.changed()) return;
+    let pushed = false;
     const k = Math.min(1, DANGER.separationRate * dt);
     const objects = this.objects;
     for (let i = 0; i < objects.length; i++) {
@@ -142,6 +181,7 @@ export class PreyField {
         const nx = dist > 1e-6 ? dx / dist : 1;
         const nz = dist > 1e-6 ? dz / dist : 0;
         const push = (min - dist) * k;
+        pushed = true;
         const wa = b.mass / (a.mass + b.mass);
         a.position.x -= nx * push * wa;
         a.position.z -= nz * push * wa;
@@ -149,6 +189,7 @@ export class PreyField {
         b.position.z += nz * push * (1 - wa);
       }
     }
+    this.settled = !pushed;
   }
 
   /**

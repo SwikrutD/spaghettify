@@ -93,6 +93,31 @@ test('quick play joins the fullest room with space, opens a new one when all are
   assert.equal(rooms.players, 6);
 });
 
+test('load: the rooms measure their share of real time, and a busy server opens no new room but fills the ones it has', () => {
+  const clock = { now: 0 };
+  const { rooms } = arena({ maxPlayers: 2, now: () => clock.now, loadSeconds: 1 });
+  connect(rooms, 'P0');
+  // Each tick takes 4 ms of a 10 ms period (the clock moves while the rooms run): 40 percent.
+  const room = rooms.rooms[0];
+  const advance = room.advance.bind(room);
+  room.advance = (now: number) => {
+    advance(now);
+    clock.now += 4;
+  };
+  for (let i = 0; i < 300; i++) {
+    rooms.tick();
+    clock.now += 6;
+  }
+  assert.ok(Math.abs(rooms.load - 0.4) < 0.01, `load ${rooms.load}`);
+  rooms.load = NET.rooms.maxLoad + 0.01;
+  connect(rooms, 'P1');
+  assert.equal(rooms.rooms.length, 1, 'the room with space still takes a player');
+  assert.equal(rooms.join(new Player(new TestLink()), 'P2', undefined), null, 'no new room while busy');
+  rooms.load = 0;
+  connect(rooms, 'P2');
+  assert.equal(rooms.rooms.length, 2);
+});
+
 test('leave: the hole leaves the arena, a life in progress is scored and posted as it stands, and a bot comes back', () => {
   const { rooms, posted } = arena();
   const a = connect(rooms, 'Alpha');

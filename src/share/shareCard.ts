@@ -78,13 +78,15 @@ export function renderShareCard(stats: RunStats, snapshot: HTMLCanvasElement | n
   text(ctx, size, x, 470, `600 22px ${FONT}`, 'rgba(255, 255, 255, 0.8)', 0.2, maxText);
   const mins = Math.floor(stats.seconds / 60);
   const secs = String(Math.floor(stats.seconds % 60)).padStart(2, '0');
-  const eaten = `${stats.eatenCount} ${stats.eatenCount === 1 ? 'object' : 'objects'} spaghettified in ${mins}:${secs}`;
+  const eaten = `${stats.eatenCount.toLocaleString('en-US')} ${stats.eatenCount === 1 ? 'object' : 'objects'} spaghettified in ${mins}:${secs}`;
   text(ctx, eaten, x, 504, `400 20px ${FONT}`, 'rgba(255, 255, 255, 0.6)', 0, maxText);
   // Arena lines: the holes swallowed, who ended the life and which arena it was.
   const arena: string[] = [];
   if (stats.holesEaten > 0) arena.push(`${stats.holesEaten} ${stats.holesEaten === 1 ? 'black hole' : 'black holes'} swallowed`);
   if (stats.eatenBy) arena.push(`eaten by ${stats.eatenBy}`);
-  if (arena.length) text(ctx, arena.join(', '), x, 538, `400 20px ${FONT}`, 'rgba(255, 190, 120, 0.9)', 0, maxText);
+  // A long nickname shrinks the line's font rather than squeezing its letters.
+  const arenaLine = arena.join(', ');
+  if (arena.length) text(ctx, arenaLine, x, 538, fitFont(ctx, arenaLine, 400, 20, maxText), 'rgba(255, 190, 120, 0.9)', 0, maxText);
   text(ctx, stats.online ? 'ONLINE ARENA' : 'OFFLINE ARENA', x, 134 + 14, `600 13px ${FONT}`, 'rgba(255, 255, 255, 0.45)', 0.35, maxText);
 
   text(ctx, 'How big can you grow?', x, H - 92, `400 22px ${FONT}`, 'rgba(255, 255, 255, 0.75)', 0, maxText);

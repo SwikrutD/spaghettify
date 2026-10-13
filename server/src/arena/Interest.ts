@@ -225,7 +225,7 @@ export class Interest {
       if (known && sent.gen[slot] === body.gen && sent.state[slot] === state) {
         if (kind !== BODY_KIND.prey) continue;
         const moved = Math.abs(body.position.x - sent.x[slot]) + Math.abs(body.position.z - sent.z[slot]);
-        if (moved <= body.radius * 1e-3) continue;
+        if (moved <= body.radius * NET.interest.preyMoveTolerance) continue;
       }
       writeBody(w, kind, slot, body);
       sent.gen[slot] = body.gen;

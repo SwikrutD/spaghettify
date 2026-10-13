@@ -17,10 +17,21 @@ export const NET = {
     maxPlayers: 12,
     /** Bots a room keeps however many players there are. */
     minBots: 0,
-    /** Rooms the server runs at most; past that quick play says the server is full. */
+    /**
+     * Rooms the server runs at most; past that quick play says the server is full. Every room runs on the one Node
+     * thread, so this is sized for one core of the server box (M21 load test, see Progress.md): a full room of 12
+     * players costs about 4.5 percent of an i7-8700K core with its sockets, so 8 full rooms are about half of an
+     * i3-6100 core (the TrueNAS box).
+     */
     maxRooms: 8,
     /** A room with no players is closed after this many seconds (so someone who rejoins at once finds it again). */
     emptySeconds: 60,
+    /**
+     * No new room opens while the rooms take more than this share of real time (about the share of one core),
+     * measured over `loadSeconds`; players still join rooms with space. A guard for a box busy with other work.
+     */
+    maxLoad: 0.75,
+    loadSeconds: 5,
   },
   interest: {
     /**
@@ -35,6 +46,12 @@ export const NET = {
     leaveFactor: 1.15,
     /** Holes are sent while within the interest radius plus this many of their own radii (their disks reach out). */
     holeMargin: 3,
+    /**
+     * A body pushed apart from another is sent again once it has moved this fraction of its radius since it was last
+     * sent (it lands within that of its true place on the client). Settling after a respawn otherwise sends a body
+     * every snapshot for half a second; at 1e-3 that was most of a big hole's bandwidth.
+     */
+    preyMoveTolerance: 0.01,
     /** Comets are sent from this many of their radii (plus their tail) outside the interest radius. */
     cometMargin: 12,
     /**

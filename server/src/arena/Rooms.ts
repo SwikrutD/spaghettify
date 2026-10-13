@@ -12,6 +12,9 @@ export interface ArenaOptions {
   /** Rooms the server runs at most, and seconds a room may stay empty before it closes. */
   maxRooms: number;
   emptySeconds: number;
+  /** No new room opens while running the rooms takes more than this share of real time (see Rooms.load). */
+  maxLoad: number;
+  loadSeconds: number;
   /** World seed for a new room (random by default). */
   seed: () => number;
   /** The clock rooms run on, in milliseconds (performance.now by default). */
@@ -28,8 +31,15 @@ export class Rooms {
   readonly rooms: Room[] = [];
   readonly options: ArenaOptions;
   private readonly post: LifePoster;
+  /**
+   * Share of real time spent running the rooms (steps and snapshots) over the last NET.rooms.loadSeconds: about the
+   * share of one CPU core they use, since they all run on the one Node thread.
+   */
+  load = 0;
   private nextId = 1;
   private timer: ReturnType<typeof setInterval> | null = null;
+  private busy = 0;
+  private loadSince = -1;
 
   constructor(options: Partial<ArenaOptions>, post: LifePoster) {
     this.options = {
@@ -57,6 +67,8 @@ export class Rooms {
     }
     if (best) return best;
     if (this.rooms.length >= this.options.maxRooms) return null;
+    // A busy box (rooms full of giants, or other work on the machine) takes no new room: the ones running stay smooth.
+    if (this.rooms.length > 0 && this.load > this.options.maxLoad) return null;
     const o = this.options;
     const room = new Room(this.nextId++, { population: o.population, maxPlayers: o.maxPlayers, minBots: o.minBots, seed: o.seed() >>> 0 }, this.post, o.now());
     this.rooms.push(room);
@@ -77,6 +89,7 @@ export class Rooms {
   /** Advance every room to now; close the rooms that have been empty for NET.rooms.emptySeconds, and any that fails. */
   tick(): void {
     const now = this.options.now();
+    if (this.loadSince < 0) this.loadSince = now;
     for (let i = this.rooms.length - 1; i >= 0; i--) {
       const room = this.rooms[i];
       try {
@@ -95,6 +108,13 @@ export class Rooms {
         continue;
       }
       if (room.players.length === 0 && room.world.time - room.emptySince >= this.options.emptySeconds) this.rooms.splice(i, 1);
+    }
+    const done = this.options.now();
+    this.busy += done - now;
+    if (done - this.loadSince >= this.options.loadSeconds * 1000) {
+      this.load = this.busy / (done - this.loadSince);
+      this.busy = 0;
+      this.loadSince = done;
     }
   }
 

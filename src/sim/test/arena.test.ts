@@ -128,3 +128,27 @@ test('the gas wall: a hole driving outward is pushed back inside the edge at any
     assert.ok(hole.velocity.x <= 1e-9);
   }
 });
+
+test('bodies at rest skip the separation and the grid rebuild, exactly: a world that always does both ends up the same', () => {
+  const a = new World({ seed: 47, bots: 8 });
+  const b = new World({ seed: 47, bots: 8 });
+  const force = b.prey as unknown as { settled: boolean; built: boolean };
+  for (let i = 0; i < 60 * 20; i++) {
+    a.step();
+    force.settled = force.built = false;
+    b.step();
+  }
+  a.prey.objects.forEach((o, i) => {
+    const p = b.prey.objects[i];
+    assert.equal(o.state, p.state);
+    assert.equal(o.position.x, p.position.x);
+    assert.equal(o.position.z, p.position.z);
+  });
+  a.holes.forEach((h, i) => assert.equal(h.position.x, b.holes[i].position.x));
+  // A body put on top of another by hand, long after the arena settled, is still pushed off it.
+  const [one, two] = a.prey.objects.filter((o) => o.state === 'alive');
+  two.position.x = one.position.x + one.radius * 0.5;
+  two.position.z = one.position.z;
+  run(a, 1);
+  assert.ok(distance(one, two) >= (one.radius + two.radius) * DANGER.bodyPad * 0.99);
+});

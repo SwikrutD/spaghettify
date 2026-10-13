@@ -380,6 +380,6 @@ function checkField(room: Room, wire: Wire, arena: OnlineArena): void {
     if (seen.state === 'gone') return;
     assert.equal(seen.gen, body.gen, `body ${slot} life`);
     assert.equal(seen.state, body.state, `body ${slot} state`);
-    assert.ok(Math.abs(seen.position.x - body.position.x) < body.radius * 2e-3, `body ${slot} x`);
+    assert.ok(Math.abs(seen.position.x - body.position.x) < body.radius * (NET.interest.preyMoveTolerance + 1e-3), `body ${slot} x`);
   });
 }

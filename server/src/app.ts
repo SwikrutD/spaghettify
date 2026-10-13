@@ -35,7 +35,7 @@ const TRUSTED_PROXIES = ['127.0.0.0/8', '10.0.0.0/8', '172.16.0.0/12', '192.168.
  *   POST /api/scores               submit a run; returns the player's rank by their best run
  *   GET  /api/scores/top?limit=n   best run per player, highest first
  *   GET  /api/scores/rank?score=n  where a score would place (for players without a nickname)
- *   GET  /api/online               players online and rooms open
+ *   GET  /api/online               players online, rooms open and the rooms' share of a core
  *   GET  /api/health
  * and the online arena is a WebSocket at NET.path (/ws, see arena/socket.ts), whose rooms post the lives they score
  * to the same leaderboard.
@@ -81,7 +81,8 @@ export async function buildApp(options: AppOptions): Promise<FastifyInstance> {
 
   app.get('/api/health', async () => ({ ok: true }));
 
-  app.get('/api/online', async () => ({ players: rooms.players, rooms: rooms.rooms.length }));
+  // `load`: the share of one core the rooms took lately (to check the box by hand; the game reads players and rooms).
+  app.get('/api/online', async () => ({ players: rooms.players, rooms: rooms.rooms.length, load: Math.round(rooms.load * 1000) / 1000 }));
 
   app.post(
     '/api/scores',
