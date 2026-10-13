@@ -188,6 +188,28 @@ clients against a server (`--url ws://localhost:8095/ws` for the Docker stack; e
 `X-Forwarded-For`, which counts because it comes from a private address, so the per-IP limits do not refuse
 them).
 
+**Round trip (the ms on the corner line).** `npm run probe` (on the PC; `-- https://host --seconds 30` for
+another address or length) shows where the time goes: the Cloudflare datacenter that answers, the warm round
+trip to that edge alone and through to the api, then it joins quick play as an anonymous player (never posted)
+and reports the WebSocket ping, the gaps between snapshots and the bandwidth. Snapshot gaps of a steady 50 ms
+mean the server keeps time; a high ping on top of that is spent on the way.
+
+Measured from the PC on 2026-10-13: Cloudflare's own Chicago datacenter is 11 ms away (traceroute), but
+connections to `spaghettify.swikrut.com` are carried to Dublin, Paris or Warsaw (`colo=DUB`, `CDG`, `WAW` in
+`/cdn-cgi/trace`), which is about 120 to 155 ms to the edge alone. The tunnel then brings the traffic back to
+the NAS, so the WebSocket ping sits at 380 to 450 ms with stalls up to 2.7 s, while the server sent snapshots
+every 50 ms on time. That is Cloudflare's routing of free plan traffic, not the game, and it can differ by
+ISP, by mobile carrier and by time of day. Things to try on the Cloudflare side:
+
+- Zero Trust > Networks > Tunnels > your tunnel: the connector's details list the edge locations it is
+  connected to (for example `ord01`). If they are far away, restart `cloudflared` and check again.
+- Run `npm run probe` at another time of day and from a phone hotspot to see whether the European routing
+  is constant or comes and goes.
+- Traffic on a paid Cloudflare plan is less likely to be moved to a distant datacenter (worth a month's trial
+  with the probe before and after); Argo Smart Routing only speeds up the leg from the edge to the tunnel.
+- The fix that does not depend on Cloudflare is a DNS-only (grey cloud) hostname for `/ws` that points at the
+  home IP, with a port forwarded to Caddy (not set up; it shows the home IP and needs dynamic DNS).
+
 ## Updating
 
 On the PC: commit and `git push`.

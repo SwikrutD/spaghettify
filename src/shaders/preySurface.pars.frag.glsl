@@ -3,8 +3,9 @@
 // is a function of the point on the body's own unit sphere (vSurfPos, before the instance transform), so it turns
 // with the body's spin and stretches with it when it spaghettifies. Albedo only: the key light does the shading.
 //
-// vSurface.x is the kind (SURFACE.kinds in src/config): 1 icy dwarf planet, 2 moon, 3 rocky planet, 4 ice giant,
-// 5 gas giant, anything else plain. vSurface.y (0..1) varies the look per body. +y is the body's pole.
+// vSurface.x is the kind (SURFACE.kinds and rockKind in src/config): 1 icy dwarf planet, 2 moon, 3 rocky planet,
+// 4 ice giant, 5 gas giant, 6 rock (the flat-shaded rock material), anything else plain. vSurface.y (0..1) varies the
+// look per body. +y is the body's pole.
 
 #include lib/simplex3d.glsl
 
@@ -118,6 +119,17 @@ vec3 preySurface(vec3 base) {
     vec3 c = normalize(vec3(cos(seed * 31.0), -0.38, sin(seed * 31.0)));
     float storm = surfSpot(p, c, 0.17, 0.085) * step(0.3, seed);
     return mix(albedo, base * vec3(1.15, 0.62, 0.45), storm * 0.85);
+  }
+  if (kind < 6.5) {
+    // Rock and asteroid: patchy regolith, craters of two sizes and a fine grain. Drawn on the lumpy shape itself (not
+    // projected to the sphere), so craters sit on the bumps the facets show.
+    vec3 q = vSurfPos + seed * 17.0;
+    float patches = surfFbm(q, 1.8);
+    vec3 albedo = base * (1.0 + 0.55 * patches) * mix(vec3(1.0), vec3(1.06, 0.97, 0.9), smoothstep(0.0, 0.4, patches));
+    float craters = 0.9 * surfCraters(vSurfPos, 1.7, 0.4, seed + 13.0) + surfCraters(vSurfPos, 3.2, 0.65, seed) +
+      0.7 * surfCraters(vSurfPos, 8.5, 0.6, seed + 7.0);
+    albedo *= 1.0 + 1.1 * craters;
+    return albedo * (1.0 + 0.12 * snoise(q * 24.0) * surfDetail(24.0));
   }
   return base;
 }

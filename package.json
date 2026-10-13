@@ -14,6 +14,7 @@
     "test:server": "npm --prefix server test",
     "server": "npm --prefix server run dev",
     "load": "npm --prefix server run load --",
+    "probe": "npm --prefix server run probe --",
     "perf": "playwright test -c perf/playwright.perf.config.ts"
   },
   "dependencies": {

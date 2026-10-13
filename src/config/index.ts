@@ -146,6 +146,12 @@ export const SURFACE = {
    * giant (belts and zones, a storm oval on some). Anything else is plain.
    */
   kinds: { 'dwarf planet': 1, moon: 2, 'rocky planet': 3, 'ice giant': 4, 'gas giant': 5 } as Readonly<Record<string, number>>,
+  /**
+   * Surface of everything drawn as a lumpy rock (grains from pebbles to small moons, comet nuclei, debris): mottled
+   * regolith, craters of two sizes and a fine grain, on the rock's own shape. Rocks under PREY.tinyDetailPixels on
+   * screen are drawn plain.
+   */
+  rockKind: 6,
   /** Round bodies spin about their own pole at up to this many rad/s (the rocks tumble at PREY.spinSpeed). */
   spinSpeed: 0.25,
   /**

@@ -11,7 +11,8 @@
     "start": "node --disable-warning=ExperimentalWarning src/index.ts",
     "dev": "node --disable-warning=ExperimentalWarning --watch src/index.ts",
     "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.ts\"",
-    "load": "node --disable-warning=ExperimentalWarning --expose-gc scripts/loadtest.ts"
+    "load": "node --disable-warning=ExperimentalWarning --expose-gc scripts/loadtest.ts",
+    "probe": "node --disable-warning=ExperimentalWarning scripts/probe.ts"
   },
   "dependencies": {
     "@fastify/rate-limit": "^10.3.0",

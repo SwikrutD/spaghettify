@@ -115,7 +115,7 @@ export class PreyMesh {
   private readonly glowAttr: THREE.InstancedBufferAttribute;
   /** Per instance: heat of the body itself 0..1 (shed debris). */
   private readonly heatAttr: THREE.InstancedBufferAttribute;
-  /** Spheres only, per instance: surface kind (SURFACE.kinds) and a 0..1 variation. */
+  /** Per instance: surface kind (SURFACE.kinds, or rockKind) and a 0..1 variation; not on the tiny rocks. */
   private readonly surfaceAttr: THREE.InstancedBufferAttribute | null = null;
   private readonly round: boolean;
 
@@ -136,13 +136,15 @@ export class PreyMesh {
     geometry.setAttribute('aGlow', this.glowAttr);
     geometry.setAttribute('aHeat', this.heatAttr);
     this.round = shape === 'sphere';
-    if (this.round) {
+    // Rocks a couple of pixels across show no surface: the tiny ones skip it (and its cost).
+    const surface = shape !== 'rockTiny';
+    if (surface) {
       this.surfaceAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 2), 2);
       this.surfaceAttr.setUsage(THREE.DynamicDrawUsage);
       geometry.setAttribute('aSurface', this.surfaceAttr);
     }
 
-    this.mesh = new THREE.InstancedMesh(geometry, createPreyMaterial(shape === 'sphere'), capacity);
+    this.mesh = new THREE.InstancedMesh(geometry, createPreyMaterial(this.round, surface), capacity);
     this.mesh.frustumCulled = false;
     this.mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
     // Per-instance colour from the start, so the shader never recompiles when the first body is drawn.
@@ -232,11 +234,13 @@ export class PreyMesh {
     const { hue, sat, light } = obj.color;
     tmpColor.setHSL(lerp(hue[0], hue[1], hash01(seed, 0)), lerp(sat[0], sat[1], hash01(seed, 1)), lerp(light[0], light[1], hash01(seed, 2)));
     this.mesh.setColorAt(i, tmpColor);
+    if (this.surfaceAttr) {
+      const surface = this.surfaceAttr.array as Float32Array;
+      surface[i * 2] = this.round ? (SURFACE.kinds[obj.className] ?? 0) : SURFACE.rockKind;
+      surface[i * 2 + 1] = hash01(seed, 8);
+    }
     if (this.round) {
       // A planet turns about its own pole, which points up the screen give or take a tip, so its bands run across.
-      const surface = this.surfaceAttr!.array as Float32Array;
-      surface[i * 2] = SURFACE.kinds[obj.className] ?? 0;
-      surface[i * 2 + 1] = hash01(seed, 8);
       const angle = hash01(seed, 6) * Math.PI * 2 + (hash01(seed, 7) * 2 - 1) * SURFACE.spinSpeed * frame.time;
       tmpQuat.setFromAxisAngle(UP, angle);
       tmpNod.setFromAxisAngle(X_AXIS, -TILT + (hash01(seed, 4) * 2 - 1) * SURFACE.nod);

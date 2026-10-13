@@ -3,24 +3,24 @@
 ## Next session
 Direction (2026-10-09, see Decisions): an endless drop-in arena with bot black holes and online players that eat each other (hole.io / slither.io). CLAUDE.md is updated.
 
-Last: M22 playtest tuning, round 1, done 2026-10-13 (see Done). The game is live at spaghettify.swikrut.com (update on the NAS with `git pull`, `docker compose build`, Stop and Start the app, see deploy/DEPLOY.md). M22 changes the protocol (version 2) and the rules hash: a page cached from before the update reloads itself once on join. Still to do by the user: fill in the Umami website id (`ANALYTICS.websiteId`).
+Last: M23 playtest tuning, round 2, done 2026-10-13 (see Done). The game is live at spaghettify.swikrut.com (update on the NAS with `git pull`, `docker compose build`, Stop and Start the app, see deploy/DEPLOY.md). M23 changes no rules and no protocol (the surfaces are render only), so pages cached from M22 keep joining. Still to do by the user: fill in the Umami website id (`ANALYTICS.websiteId`).
 
-Recap of M22:
-- Done: the user's four playtest notes. (1) Phones default to the virtual joystick (settings stored by older builds with finger follow move to the joystick once). (2) No player count on the title screen (it only says when it will play offline); a new setting "Show players online" (off by default) puts the room's players back on the in-game status line. (3) Planets and moons have procedural surfaces: craters and maria on moons, icy plains and craters on dwarf planets, terrain and ice caps on rocky planets, soft bands and a dark spot on ice giants, belts, zones and a storm oval on gas giants; each turns about a pole that points up the screen. (4) Online, the bounce off a planet no longer jumps back: the client now predicts the own hole's contacts with the bodies and grains it knows (push out, knockback, stun, shed) exactly as the server does, and the own hole's timers are sent to the step. `npm run typecheck`, `npm run lint` and `npm test` pass (53 sim, 35 server, 36 Playwright tests); both Docker images build.
-- Known bugs and open questions: hole vs hole bumps and comet hits are still the server's online (a short slide back about a round trip later); the surfaces were judged on desktop stills only, not on a phone. See Known bugs (M22).
-- Next segment: M23 Playtest tuning, round 2: deploy M22, play online on a phone (mobile data) and a desktop and offline, and bring new notes.
-- Recommended model and effort: Sonnet 5.5 at high for gameplay numbers and UI; Opus 5.5 at high if the notes are about netcode feel, the planet shader or phone performance.
+Recap of M23:
+- Done: the user's two notes. (1) Rocks and asteroids now have a procedural surface (patchy regolith, craters of three sizes, a fine grain), like the planets got in M22; judged on real-GPU stills. (2) The 500 ms lag is the network path, not the game: measured from the PC, Cloudflare carries connections to Dublin, Paris or Warsaw although its Chicago datacenter is 11 ms away, and the tunnel brings them back to the NAS; the WebSocket ping sits at 380 to 450 ms with stalls up to 2.7 s while the server sends snapshots every 50 ms on time. The user chose to keep Cloudflare as it is: no game change for lag; `npm run probe` measures the route and DEPLOY.md lists what to try on the Cloudflare side. `npm run typecheck`, `npm run lint` and `npm test` pass (sim, server and 36 Playwright tests); both Docker images build.
+- Known bugs and open questions: the online round trip stays at about 400 ms or more for anyone Cloudflare routes like the user's ISP; the rock surfaces cost about 0.1 ms GPU on the desktop at 720p and were not seen on a phone. See Known bugs (M23).
+- Next segment: M24 Playtest tuning, round 3: deploy M23, play online on a phone and a desktop and offline, run `npm run probe` at another time of day (and look at the tunnel's edge locations), and bring new notes.
+- Recommended model and effort: Sonnet 5.5 at high for gameplay numbers and UI; Opus 5.5 at high if the notes are about netcode feel at a high ping, a shader or phone performance.
 - How to start it: deploy (on the NAS: `git pull`, `docker compose build`, Stop and Start the app) and play, writing down what felt off. Then run `/clear`, then `/model` and pick the model and effort above, then paste the start prompt below with the notes filled in.
 
-Start prompt for M23:
+Start prompt for M24:
 
 ```
-Start Milestone 23 (playtest tuning, round 2) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
+Start Milestone 24 (playtest tuning, round 3) from Progress.md. Read Progress.md and CLAUDE.md first, and do only this segment.
 
-Goal: apply the tuning from my playtest notes below (numbers in src/config, small feel fixes) and fix any bugs the notes show. Keep the sim deterministic and the server and client on the same rules (a shared config change changes the rules hash, which is fine for a deploy). M22 made the client predict contacts with bodies and grains online; hole vs hole bumps and comet hits are still the server's.
+Goal: apply the tuning from my playtest notes below (numbers in src/config, small feel fixes) and fix any bugs the notes show. Keep the sim deterministic and the server and client on the same rules (a shared config change changes the rules hash, which is fine for a deploy). The online round trip through Cloudflare is about 400 ms from my ISP (see M23 and the Round trip part of deploy/DEPLOY.md); I chose to keep Cloudflare, so treat lag notes as netcode feel at a high ping unless I say otherwise.
 
 My playtest notes:
-<paste notes here: device, online or offline, what felt off>
+<paste notes here: device, online or offline, what felt off, and the npm run probe output if you ran it>
 
 Done when: npm run typecheck, npm run lint and npm test pass (sim, server and Playwright); the Docker images build; Progress.md records what changed and why; the work is committed.
 ```
@@ -42,7 +42,8 @@ Phase 2, multiplayer arena (in order):
 - [x] M20 Arena leaderboard, share and analytics (2026-10-13): server-scored online lives on the board, offline lives keep the caps and are marked offline, score = peak mass points plus 500 per hole eaten, "You ate <nickname>" and the holes on the score screen and share card, analytics join, holes and online.
 - [x] M21 Load test and deploy check (2026-10-13): bandwidth and CPU per room measured with simulated clients, room limits set for the TrueNAS box (i3-6100), the Docker stack checked end to end, share card looked at. The deploy to TrueNAS and the phone playtest are the user's (no tuning without notes).
 - [x] M22 Playtest tuning, round 1 (2026-10-13): joystick default on phones, no player count on the title (a setting for the in-game line), planet and moon surfaces, the online bounce predicted.
-- [ ] M23 Playtest tuning, round 2 [Sonnet 5.5, high; Opus 5.5 high for netcode, shaders or phone performance]: tuning and fixes from the user's notes after deploying M22 and playing.
+- [x] M23 Playtest tuning, round 2 (2026-10-13): rock and asteroid surfaces; the lag traced to Cloudflare's routing (kept as is, `npm run probe`).
+- [ ] M24 Playtest tuning, round 3 [Sonnet 5.5, high; Opus 5.5 high for netcode at a high ping, shaders or phone performance]: tuning and fixes from the user's notes after deploying M23 and playing.
 - [ ] Later (not committed): private room codes, stars and a galaxy core as bigger bodies, power-ups, daily events, disk cosmetics.
 
 ## Done
@@ -139,6 +140,10 @@ Phase 2, multiplayer arena (in order):
   - Planet and moon surfaces (`src/shaders/preySurface.*.glsl`, `SURFACE` in config, render only): the smooth prey material gets a per-instance `aSurface` (kind by class name, a 0..1 variation) and colours the instance colour by a function of the point on the body's own unit sphere (3D simplex fbm, a 2x2x2 cell crater field, oval spots), fading detail under a pixel or two (`fwidth`). Round bodies now spin about their own pole at `SURFACE.spinSpeed` 0.25 rad/s; the pole points up the screen tipped by up to `roll` 0.45 and `nod` 0.35 radians, so bands run across the screen. Judged on real-GPU stills at 1280x720 and 412x860. Cost: about +0.1 ms GPU on the scene pass with about 70 textured spheres in view at 1082x2402 (GTX 1070 Ti).
   - Tests: the touch tests now cover the joystick default (and the move of an old stored finger follow) and finger follow by choice; the settings test covers the new checkbox; the online test checks no count on the title, ONLINE · ms by default and the players with the setting on.
 
+- 2026-10-13 M23: playtest tuning, round 2 (the user's notes: "the large asteroids have no texture, planets look fine. the lag is too bad, reaching over 500ms").
+  - Rock surfaces: everything drawn as a lumpy rock (grains from pebbles to small moons, comet nuclei, debris) gets kind `SURFACE.rockKind` 6 in `preySurface.pars.frag.glsl`: fbm patches of lighter and warmer or darker regolith, craters of three sizes (1.7, 3.2 and 8.5 cells per unit) and a fine grain, drawn on the lumpy shape itself (`vSurfPos` not normalized), fading under a pixel like the planets. `createPreyMaterial(smooth, surface)`: the rock meshes and the comet and debris meshes carry `aSurface` now; the tiny rocks (under `PREY.tinyDetailPixels` 3 px) stay plain and skip the cost. Render only (SURFACE is not in `rulesHash`). Judged on real-GPU stills at 1280x720 (a boulder eater next to a boulder, asteroids at radius 1.2 and 2.5, small moons at 4 and 8). Cost on the GTX 1070 Ti at 720p, quality level 0, against the same scenes with the rock surface off: scene pass +0.07 to +0.12 ms (0.18 to 0.25 ms with an asteroid filling a quarter of the screen, 0.30 to 0.38 with about 300 textured rocks in view).
+  - Lag: measured from the PC against the live server (`server/scripts/probe.ts`, `npm run probe`): ICMP to Cloudflare's Chicago datacenter 11 ms, but `/cdn-cgi/trace` on spaghettify.swikrut.com answers from DUB, CDG or WAW (a warm round trip of 120 to 155 ms to the edge alone, loc=US); `/api/health` through the tunnel 290 to 550 ms warm; the WebSocket ping 381 ms at best, 446 to 526 ms median, stalls up to 2.7 s (a run of pongs arriving together), while snapshots came every 50 ms (p99 56 to 59 ms) at 59 steps a second and 1.5 KB/s. So the server and the game are on time and the time is Cloudflare carrying free plan traffic to Europe and back through the tunnel. The user chose to keep Cloudflare only (options offered: a DNS-only arena hostname with a port forward, keeping Cloudflare, deciding later). DEPLOY.md has a Round trip part: the probe, the measurement and what to try (the tunnel's edge locations, another time of day, a paid plan, the grey-cloud hostname as the fix outside Cloudflare).
+
 ## In progress
 (nothing)
 
@@ -199,6 +204,9 @@ Phase 2, multiplayer arena (in order):
 - 2026-10-13: M22: planet surfaces are procedural in the shader (no texture files, nothing over the network, a different look per body from its seed), as albedo only. Round bodies turn about a pole that points up the screen, so a gas giant's bands read as in a photo from the tilted camera.
 - 2026-10-13: M22: the title shows no player count (user's call); the offline line stays, since it tells the player why Play will not be online.
 
+- 2026-10-13: M23: the online lag is Cloudflare's routing (free plan traffic carried to European datacenters and back through the tunnel), not the server or the netcode; the user chose to keep Cloudflare as it is rather than add a DNS-only arena hostname to the home IP. `npm run probe` stays in the repo to check the route over time.
+- 2026-10-13: M23: rock surfaces live in the same prey material as the planet surfaces (one more kind), on the rock's lumpy shape rather than its sphere, so craters sit on the facets; the tiny rock mesh stays plain since a 3 px rock shows no surface.
+
 ## Known bugs
 - Share card: looked at on a real GPU in M21 (offline, eaten by a bot). It does not show the player's own nickname (so far by design). Not seen on a phone or after an online life.
 - Score (M20): the live HUD points jump by 500 when a hole is swallowed. The best score on the title is per device and mixes online and offline lives.
@@ -219,6 +227,8 @@ Phase 2, multiplayer arena (in order):
 - Lens: a star exactly behind the hole makes an Einstein ring with faint beads (magnified texels of a small star sprite). Rare and brief.
 - Prey behind the hole look up to about 0.5 player radii farther out than they are, so they get eaten a little before they visibly touch. The M4 infall now starts from there, so it reads as being pulled in; judge in playtest.
 - Prey (M22): round bodies have procedural surfaces (albedo only, no bump: crater rims are drawn, not lit). Not seen on a phone; about +0.1 ms GPU on a desktop with many spheres in view, so a phone may pay around 1 ms (the auto scaler steps resolution first). Lit by the same key light as rocks. Seen at the screen edge they look slightly oval (perspective). The ice giant bands are faint by design.
+- Prey (M23): rocks, asteroids, comet nuclei and debris have procedural surfaces too (albedo only, like the planets). Not seen on a phone or in motion; about +0.1 ms GPU on the desktop at 720p. If a phone struggles, the rock surface is the first thing to drop on low quality rungs (it is not on the quality ladder yet). The low-poly facets of the biggest rocks still show (mesh detail 2).
+- Network (M23): from the user's ISP the online round trip is about 380 to 530 ms with stalls up to 2.7 s, all of it Cloudflare's routing to Europe and back (see M23 in Done and DEPLOY.md). Not measured from a phone on mobile data. Online play at that ping: eating shows half a second late, hole vs hole bumps and comet hits slide back late, other holes are drawn about 300 ms in the past relative to the own hole.
 - Prey: hidden slots still run the vertex shader in the other mesh (zero matrix). About 65k sphere plus 43k rock vertices per frame at most; fine on the desktop GPU, not measured on a phone.
 - Dangers: tuned from numbers and stills only (pull 0.45, shed 22 percent, invulnerable 1.2 s, comet timing).
 - Debris: tuned from numbers and two stills only (7 fragments, 0.8 of the shed, speeds, 0.6 s pickup delay, cooling). Fragments pass through other bodies and are not pulled by the hole. A fragment from an earlier hit can be inedible if the hole has since shrunk a lot (it just sits there until it fades). Cooled fragments look salmon under the key light; darken `DEBRIS.coolColor` if they read as pink.
