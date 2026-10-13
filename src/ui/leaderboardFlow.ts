@@ -28,7 +28,7 @@ export async function postRunToBoard(panel: LeaderboardPanel, stats: RunStats, n
 
   if (!nickname) return showUnposted(panel, stats, stale, 'Set a nickname on the title screen to post your scores.');
 
-  const outcome = await submitRun({ nickname, score: stats.score, tier: stats.milestoneNumber, seconds: Math.round(stats.seconds * 10) / 10, eaten: stats.eatenCount });
+  const outcome = await submitRun({ nickname, score: stats.score, tier: stats.milestoneNumber, seconds: Math.round(stats.seconds * 10) / 10, eaten: stats.eatenCount, holes: stats.holesEaten, offline: true });
   track('leaderboard-submit', { result: outcome.status === 'rejected' ? outcome.reason : outcome.status, tier: stats.milestoneNumber });
   if (stale()) return;
   if (outcome.status === 'offline') return panel.setStatus(OFFLINE);

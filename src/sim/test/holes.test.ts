@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { ARENA, BOTS, DANGER, DEBRIS, HOLES } from '../../config/index.ts';
+import { ARENA, BOTS, DANGER, DEBRIS, HOLES, HUNGER } from '../../config/index.ts';
 import type { AteEvent, BumpedEvent, DiedEvent, HoleEatenEvent, ShedEvent } from '../events.ts';
 import { holeMassForRadius, responsiveness, topSpeed, viewDistance, type Hole } from '../Hole.ts';
 import { World } from '../World.ts';
@@ -43,6 +43,9 @@ test('a hole clearly bigger swallows a smaller one it covers: most of the mass t
   assert.equal(ate.length, 1);
   assert.deepEqual(ate[0].what, { name: 'Beta', radius: b.radius, hole: true });
   assert.equal(a.holesEaten, 1);
+  // The score is the peak mass in points plus the bonus for the hole; the live points follow the same rule.
+  assert.equal(a.score, Math.round((a.peakMass - a.startMass) * HUNGER.pointsPerMass) + HOLES.scorePerHole);
+  assert.equal(a.livePoints, Math.round((a.mass - a.startMass) * HUNGER.pointsPerMass) + HOLES.scorePerHole);
   assert.equal(a.eatenCount, 1);
   assert.equal(a.biggestEaten?.name, 'Beta');
   // The victim is being swallowed: out of play, no longer steering or eating.

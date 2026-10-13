@@ -1,4 +1,4 @@
-import { CAMERA, COMETS, DANGER, GROWTH, HUNGER, PLAYER } from '../config/index.ts';
+import { CAMERA, COMETS, DANGER, GROWTH, HOLES, HUNGER, PLAYER } from '../config/index.ts';
 import type { BotBrain } from './Bots.ts';
 import { Hunger, type RunPhase } from './Hunger.ts';
 import { vec2 } from './vec.ts';
@@ -128,9 +128,14 @@ export class Hole {
     return this.hunger.phase === 'playing';
   }
 
-  /** Points for this life: the peak mass gained over the start. */
+  /** Points for this life: the peak mass gained over the start, plus a bonus for every hole swallowed. */
   get score(): number {
-    return Math.round((this.peakMass - this.startMass) * HUNGER.pointsPerMass);
+    return Math.round((this.peakMass - this.startMass) * HUNGER.pointsPerMass) + this.holesEaten * HOLES.scorePerHole;
+  }
+
+  /** Points as they stand now (the live board): the mass gained over the start right now, plus the hole bonus. */
+  get livePoints(): number {
+    return Math.round(Math.max(0, this.mass - this.startMass) * HUNGER.pointsPerMass) + this.holesEaten * HOLES.scorePerHole;
   }
 
   /** Continuous mass-to-radius curve. */

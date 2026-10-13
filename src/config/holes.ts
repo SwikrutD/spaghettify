@@ -11,6 +11,8 @@ export const HOLES = {
   coverFraction: 0.9,
   /** Fraction of the eaten hole's mass the eater gains. The rest is radiated away as gravitational waves. */
   massTransfer: 0.8,
+  /** Points a swallowed hole adds to the eater's score on top of the mass it brought (a kill is worth more than its mass). */
+  scorePerHole: 500,
   /** Seconds the eaten hole spends spaghettifying into the eater before its life is over. */
   infallTime: 1.2,
   /** How far into a swallow the eaten hole is drawn: stretch along the line to the eater, swirl (radians), and the infall curve. */

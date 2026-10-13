@@ -742,6 +742,9 @@ export const LEADERBOARD = {
   /** Meals a run can count: small ones come fast (a sweep through dust), but not faster than this overall. */
   maxEatenPerSecond: 25,
   mealSlack: 5,
+  /** Holes a run can have swallowed: at most this many a second, plus slack. */
+  maxHolesPerSecond: 0.5,
+  holeSlack: 3,
   minSeconds: 3,
   maxSeconds: 3 * 60 * 60,
   /** Relative tolerance on the milestone mass check (rounding and float drift). */

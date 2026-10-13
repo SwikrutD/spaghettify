@@ -4,7 +4,7 @@ import { buildApp, type AppOptions } from '../src/app.ts';
 import { MILESTONES } from '../../src/config/index.ts';
 import { checkRun, cleanNickname, isProfane, maxScore, minScore, type RunSubmission } from '../../src/leaderboard/rules.ts';
 
-const run = (over: Partial<RunSubmission> = {}): RunSubmission => ({ nickname: 'Pea', score: 1200, tier: 1, seconds: 40, eaten: 30, ...over });
+const run = (over: Partial<RunSubmission> = {}): RunSubmission => ({ nickname: 'Pea', score: 1200, tier: 1, seconds: 40, eaten: 30, holes: 0, offline: false, ...over });
 
 async function app(options: Partial<AppOptions> = {}) {
   return buildApp({ dbPath: ':memory:', submitPerMinute: 1000, requestsPerMinute: 10000, ...options });
@@ -56,6 +56,17 @@ describe('rules', () => {
     assert.equal(reason(run({ score: maxScore(40) + 1 })), 'implausible');
     assert.equal(reason(run({ seconds: 4, score: 10_000 })), 'implausible');
     assert.equal(reason(run({ eaten: 5000 })), 'implausible');
+    // Holes swallowed add to the cap, but only so many fit in a life.
+    assert.equal(reason(run({ score: maxScore(40) + 1, holes: 1 })), 'ok');
+    assert.equal(reason(run({ score: maxScore(40, 2) + 1, holes: 2 })), 'implausible');
+    assert.equal(reason(run({ holes: 500 })), 'implausible');
+    assert.equal(reason({ ...run(), holes: -1 }), 'invalid');
+    assert.equal(reason({ ...run(), offline: 'yes' }), 'invalid');
+    // Older clients send neither field: no holes, not marked.
+    const old: Record<string, unknown> = { ...run() };
+    delete old.holes;
+    delete old.offline;
+    assert.deepEqual(checkRun(old), { ok: true, run: run() });
     // Claims milestone 3 without the mass it takes to get there.
     assert.equal(reason(run({ tier: 3, score: 5000 })), 'implausible');
     assert.equal(reason(run({ tier: 3, score: minScore(3) + 1000, seconds: 200, eaten: 400 })), 'ok');
@@ -92,7 +103,7 @@ describe('api', () => {
     const body = res.json() as { entries: { rank: number; nickname: string; score: number; tier: number }[]; total: number };
     assert.equal(body.total, 60);
     assert.equal(body.entries.length, 50);
-    assert.deepEqual(body.entries[0], { rank: 1, nickname: 'P59', score: 6000, tier: 1 });
+    assert.deepEqual(body.entries[0], { rank: 1, nickname: 'P59', score: 6000, tier: 1, holes: 0, offline: false });
     assert.equal(body.entries[49].score, 1100);
     assert.ok(body.entries.every((e, i) => i === 0 || e.score <= body.entries[i - 1].score));
 
@@ -106,6 +117,16 @@ describe('api', () => {
     assert.deepEqual(res.json(), { rank: 2, total: 61 });
     res = await a.inject({ method: 'GET', url: '/api/scores/rank?score=abc' });
     assert.equal(res.statusCode, 400);
+    await a.close();
+  });
+
+  test('the board carries the holes and marks runs played offline', async () => {
+    const a = await app();
+    const post = (payload: unknown) => a.inject({ method: 'POST', url: '/api/scores', payload: payload as object });
+    await post(run({ nickname: 'Solo', score: 5000, holes: 2, offline: true }));
+    await post(run({ nickname: 'Online', score: 4000 }));
+    const body = (await a.inject({ method: 'GET', url: '/api/scores/top' })).json() as { entries: { nickname: string; holes: number; offline: boolean }[] };
+    assert.deepEqual(body.entries.map((e) => [e.nickname, e.holes, e.offline]), [['Solo', 2, true], ['Online', 0, false]]);
     await a.close();
   });
 

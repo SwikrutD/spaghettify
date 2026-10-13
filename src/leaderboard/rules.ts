@@ -1,6 +1,6 @@
 // Leaderboard rules shared by the game and the server (server/ imports this file directly and runs it
 // with Node's type stripping), so: no DOM, erasable TypeScript only and `.ts` import extensions.
-import { GROWTH, HUNGER, LEADERBOARD, MENU, MILESTONES, PLAYER } from '../config/index.ts';
+import { GROWTH, HOLES, HUNGER, LEADERBOARD, MENU, MILESTONES, PLAYER } from '../config/index.ts';
 import { MILESTONE_MASSES } from '../sim/milestones.ts';
 
 /** What the game submits at the end of a life. */
@@ -12,6 +12,10 @@ export interface RunSubmission {
   tier: number;
   seconds: number;
   eaten: number;
+  /** Other holes swallowed (each adds HOLES.scorePerHole to the score). */
+  holes: number;
+  /** Posted by the game itself from an offline arena (bots only), not scored by the server. */
+  offline: boolean;
 }
 
 /** Keep letters, digits, spaces and a few separators; trim and cap the length. */
@@ -59,11 +63,11 @@ export function isProfane(raw: string): boolean {
 
 const START_MASS = GROWTH.massDensity * Math.pow(PLAYER.startRadius, GROWTH.massExponent);
 
-/** Highest score a life of this length can plausibly reach: the start mass doubled every few seconds, up to a cap. */
-export function maxScore(seconds: number): number {
+/** Highest score a life of this length (with this many holes swallowed) can plausibly reach: the start mass doubled every few seconds, up to a cap, plus the hole bonus. */
+export function maxScore(seconds: number, holes = 0): number {
   const doublings = Math.min(seconds / LEADERBOARD.doublingSeconds, 60);
   const peak = Math.min(LEADERBOARD.maxPeakMass, START_MASS * Math.pow(2, doublings));
-  return Math.ceil(HUNGER.pointsPerMass * (peak - START_MASS));
+  return Math.ceil(HUNGER.pointsPerMass * (peak - START_MASS)) + holes * HOLES.scorePerHole;
 }
 
 /** Lowest score that can have reached this milestone (1-based): its mass, over the start mass. */
@@ -82,19 +86,25 @@ export function checkRun(input: unknown): RunCheck {
   if (!input || typeof input !== 'object') return { ok: false, reason: 'invalid' };
   const r = input as Record<string, unknown>;
   const { nickname, score, tier, seconds, eaten } = r;
+  const holes = r.holes ?? 0;
+  const offline = r.offline ?? false;
   if (typeof nickname !== 'string' || nickname.length > 64) return { ok: false, reason: 'invalid' };
   if (!Number.isSafeInteger(score) || (score as number) < 0) return { ok: false, reason: 'invalid' };
   if (!Number.isInteger(tier) || (tier as number) < 1 || (tier as number) > MILESTONES.length) return { ok: false, reason: 'invalid' };
   if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds < 0) return { ok: false, reason: 'invalid' };
   if (!Number.isSafeInteger(eaten) || (eaten as number) < 0) return { ok: false, reason: 'invalid' };
 
+  if (!Number.isSafeInteger(holes) || (holes as number) < 0) return { ok: false, reason: 'invalid' };
+  if (typeof offline !== 'boolean') return { ok: false, reason: 'invalid' };
+
   const name = cleanNickname(nickname);
   if (!name || isProfane(name)) return { ok: false, reason: 'nickname' };
 
-  const run: RunSubmission = { nickname: name, score: score as number, tier: tier as number, seconds, eaten: eaten as number };
+  const run: RunSubmission = { nickname: name, score: score as number, tier: tier as number, seconds, eaten: eaten as number, holes: holes as number, offline };
   if (run.seconds < LEADERBOARD.minSeconds || run.seconds > LEADERBOARD.maxSeconds) return { ok: false, reason: 'implausible' };
   if (run.eaten > LEADERBOARD.maxEatenPerSecond * run.seconds + LEADERBOARD.mealSlack) return { ok: false, reason: 'implausible' };
-  if (run.score > maxScore(run.seconds)) return { ok: false, reason: 'implausible' };
+  if (run.holes > LEADERBOARD.maxHolesPerSecond * run.seconds + LEADERBOARD.holeSlack) return { ok: false, reason: 'implausible' };
+  if (run.score > maxScore(run.seconds, run.holes)) return { ok: false, reason: 'implausible' };
   if (run.score < minScore(run.tier)) return { ok: false, reason: 'implausible' };
   return { ok: true, run };
 }

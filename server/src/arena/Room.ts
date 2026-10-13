@@ -1,4 +1,4 @@
-import { HUNGER, NET } from '../../../src/config/index.ts';
+import { NET } from '../../../src/config/index.ts';
 import { cleanNickname, isProfane, type RunSubmission } from '../../../src/leaderboard/rules.ts';
 import {
   clampReach,
@@ -30,7 +30,7 @@ export type LifePoster = (run: RunSubmission) => PostedLife | null;
 
 /** A hole's points on the live board: the mass it has grown by over its start (as the HUD shows them). */
 function livePoints(hole: Hole): number {
-  return Math.round(Math.max(0, hole.mass - hole.startMass) * HUNGER.pointsPerMass);
+  return hole.livePoints;
 }
 
 /**
@@ -274,6 +274,8 @@ export class Room {
       tier: hole.milestone + 1,
       seconds: Math.round(hole.hunger.runTime * 10) / 10,
       eaten: hole.eatenCount,
+      holes: hole.holesEaten,
+      offline: false,
     };
     let posted: PostedLife | null = null;
     if (player.named && run.score >= NET.minPostScore) {

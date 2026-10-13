@@ -174,7 +174,7 @@ test('a player eaten by a bot: the server scores the life and posts it (bots nev
   assert.ok(over.posted && over.posted.rank === 1);
   // Only the player's life was posted, under its nickname.
   assert.equal(posted.length, 1);
-  assert.deepEqual(posted[0], { nickname: 'Alpha', score: over.score, tier: over.milestone, seconds: over.seconds, eaten: over.eaten });
+  assert.deepEqual(posted[0], { nickname: 'Alpha', score: over.score, tier: over.milestone, seconds: over.seconds, eaten: over.eaten, holes: over.holesEaten, offline: false });
   // Not at once, then a new life somewhere clear.
   assert.equal(room.play(a.player), false);
   run(room, NET.limits.playAgainDelay);

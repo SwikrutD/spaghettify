@@ -264,6 +264,9 @@ test('the player swallows a smaller hole: its mass transfers on the hole curve, 
   await expect(page.getByTestId('score-screen')).toBeVisible({ timeout: 30_000 });
   await expect(page.getByTestId('cause')).toContainText('EVAPORATED');
   await expect(page.getByTestId('stats')).toContainText('Holes eaten1');
+  await expect(page.getByTestId('stats')).toContainText('ArenaOffline');
+  // The hole is worth its bonus on top of the mass.
+  expect(Number((await page.getByTestId('score').textContent())!.replace(/,/g, ''))).toBeGreaterThanOrEqual(500);
   await expect(page.getByTestId('ladder')).toHaveText(`You ate ${before.prey}`);
   expect(errors).toEqual([]);
 });

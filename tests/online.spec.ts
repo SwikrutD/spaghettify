@@ -185,6 +185,7 @@ test('online: two players in one room see each other, one eats the other (the se
       expect(a.page.getByTestId('hud-feed')).toContainText('Alpha ate Beta', { timeout: 20_000 }),
     ]);
     await expect(b.page.getByTestId('cause')).toContainText('Eaten by Alpha');
+    await expect(b.page.getByTestId('stats')).toContainText('ArenaOnline');
     expect(await a.page.evaluate(() => (window.__spaghettify.net.arena!.local as unknown as { holesEaten: number }).holesEaten)).toBe(1);
     // The server scored the life and posted it under Beta's nickname; the score screen shows its rank. Neither game
     // posted anything itself.

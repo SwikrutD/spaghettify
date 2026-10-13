@@ -199,8 +199,10 @@ since M16; the name stayed for compatibility. Custom events (sent only on the li
 
 | Event | When | Fields |
 | --- | --- | --- |
-| `run-start` | Play from the title screen or Play again | `from` (`title` or `restart`) |
-| `run-end` | The life ends (evaporated or eaten by another hole) | `band` (score range), `tier` (the size milestone reached, 1 to 9), `seconds`, `eaten`, `newBest`, `cause` (`evaporated` or `eaten`) |
+| `join` | Play from the title screen picked an arena | `online` (true or false), `why` (`ok`, or for the offline arena: `offline-mode`, `unreachable`, `full`, `version` or the reason a join dropped), `from` |
+| `run-start` | Play from the title screen or Play again | `from` (`title` or `restart`), `online` |
+| `run-end` | The life ends (evaporated or eaten by another hole) | `band` (score range), `tier` (the size milestone reached, 1 to 9), `seconds`, `eaten`, `holes` (holes swallowed), `newBest`, `cause` (`evaporated` or `eaten`), `online` |
+| `net-drop` | The connection to the online arena ended without the player leaving | `why`, `carried` (the life carried on offline) |
 | `leaderboard-submit` | The score screen posted a run (only with a nickname set) | `result` (`ok`, `offline`, `nickname`, `implausible`, `invalid` or `rate`), `tier` |
 | `share` | The share card was shared (share sheet) or saved (download) from the score screen | `method` (`share` or `download`), `band`, `tier` |
 

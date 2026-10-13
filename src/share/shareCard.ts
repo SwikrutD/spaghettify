@@ -12,7 +12,8 @@ export function displayUrl(): string {
 /** Text that goes with the image in the share sheet. */
 export function shareText(stats: RunStats): string {
   const score = stats.score.toLocaleString('en-US');
-  return `${ladderLine(stats.biggest)} as a baby black hole in Spaghettify and scored ${score}. ${SHARE.url}`;
+  const holes = stats.holesEaten > 0 ? ` and swallowed ${stats.holesEaten} ${stats.holesEaten === 1 ? 'black hole' : 'black holes'}` : '';
+  return `${ladderLine(stats.biggest)} as a baby black hole in Spaghettify${holes} and scored ${score}. ${SHARE.url}`;
 }
 
 export function cardFileName(stats: RunStats): string {
@@ -79,6 +80,12 @@ export function renderShareCard(stats: RunStats, snapshot: HTMLCanvasElement | n
   const secs = String(Math.floor(stats.seconds % 60)).padStart(2, '0');
   const eaten = `${stats.eatenCount} ${stats.eatenCount === 1 ? 'object' : 'objects'} spaghettified in ${mins}:${secs}`;
   text(ctx, eaten, x, 504, `400 20px ${FONT}`, 'rgba(255, 255, 255, 0.6)', 0, maxText);
+  // Arena lines: the holes swallowed, who ended the life and which arena it was.
+  const arena: string[] = [];
+  if (stats.holesEaten > 0) arena.push(`${stats.holesEaten} ${stats.holesEaten === 1 ? 'black hole' : 'black holes'} swallowed`);
+  if (stats.eatenBy) arena.push(`eaten by ${stats.eatenBy}`);
+  if (arena.length) text(ctx, arena.join(', '), x, 538, `400 20px ${FONT}`, 'rgba(255, 190, 120, 0.9)', 0, maxText);
+  text(ctx, stats.online ? 'ONLINE ARENA' : 'OFFLINE ARENA', x, 134 + 14, `600 13px ${FONT}`, 'rgba(255, 255, 255, 0.45)', 0.35, maxText);
 
   text(ctx, 'How big can you grow?', x, H - 92, `400 22px ${FONT}`, 'rgba(255, 255, 255, 0.75)', 0, maxText);
   text(ctx, displayUrl(), x, H - 56, `700 26px ${FONT}`, 'rgba(255, 190, 120, 1)', 0.05, maxText);

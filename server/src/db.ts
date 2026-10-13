@@ -8,6 +8,9 @@ export interface TopEntry {
   nickname: string;
   score: number;
   tier: number;
+  /** The best run was posted by an offline game (bots only). */
+  offline: boolean;
+  holes: number;
 }
 
 /**
@@ -35,26 +38,30 @@ export class ScoreStore {
       CREATE INDEX IF NOT EXISTS scores_by_name ON scores (nickname COLLATE NOCASE, score DESC);
       CREATE INDEX IF NOT EXISTS scores_by_score ON scores (score DESC);
     `);
+    // Columns added with the arena (M20); older files get them with defaults (everything before was a solo, offline-style run).
+    const columns = (this.db.prepare('PRAGMA table_info(scores)').all() as { name: string }[]).map((c) => c.name);
+    if (!columns.includes('holes')) this.db.exec('ALTER TABLE scores ADD COLUMN holes INTEGER NOT NULL DEFAULT 0');
+    if (!columns.includes('offline')) this.db.exec('ALTER TABLE scores ADD COLUMN offline INTEGER NOT NULL DEFAULT 0');
   }
 
   add(run: RunSubmission, now = Date.now()): void {
     this.db
-      .prepare('INSERT INTO scores (nickname, score, tier, seconds, eaten, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(run.nickname, run.score, run.tier, run.seconds, run.eaten, now);
+      .prepare('INSERT INTO scores (nickname, score, tier, seconds, eaten, holes, offline, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .run(run.nickname, run.score, run.tier, run.seconds, run.eaten, run.holes, run.offline ? 1 : 0, now);
   }
 
   /** Best run per player, highest first. Ties go to whoever got there first. */
   top(limit: number): TopEntry[] {
     const rows = this.db
       .prepare(
-        `SELECT nickname, score, tier FROM (
-           SELECT nickname, score, tier, created_at,
+        `SELECT nickname, score, tier, holes, offline FROM (
+           SELECT nickname, score, tier, holes, offline, created_at,
                   ROW_NUMBER() OVER (PARTITION BY nickname COLLATE NOCASE ORDER BY score DESC, created_at ASC) AS n
            FROM scores
          ) WHERE n = 1 ORDER BY score DESC, created_at ASC LIMIT ?`,
       )
-      .all(limit) as { nickname: string; score: number; tier: number }[];
-    return rows.map((r, i) => ({ rank: i + 1, nickname: r.nickname, score: r.score, tier: r.tier }));
+      .all(limit) as { nickname: string; score: number; tier: number; holes: number; offline: number }[];
+    return rows.map((r, i) => ({ rank: i + 1, nickname: r.nickname, score: r.score, tier: r.tier, holes: r.holes, offline: r.offline === 1 }));
   }
 
   /** Place a score would take among the players' best runs (other than `nickname`'s own), and how many players there are. */

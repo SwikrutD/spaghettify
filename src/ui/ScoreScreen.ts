@@ -16,6 +16,8 @@ export interface RunStats {
   /** Nickname of the hole that ate this one, or null if it evaporated. */
   eatenBy: string | null;
   seconds: number;
+  /** True when the life was played in the online arena (scored by the server), false for the offline arena. */
+  online: boolean;
 }
 
 /** End-of-run screen: stats, the milestone ladder line and a play again button. Plain DOM above the canvas. */
@@ -120,6 +122,7 @@ export class ScoreScreen {
       row('Objects eaten', String(stats.eatenCount)) +
       (stats.holesEaten > 0 ? row('Holes eaten', String(stats.holesEaten)) : '') +
       row('Time', `${mins}:${secs}`) +
+      row('Arena', stats.online ? 'Online' : 'Offline') +
       `</div>`;
     this.status.textContent = '';
     this.body.append(document.createElement('div'), this.button, this.shareButton, this.status);

@@ -1,4 +1,3 @@
-import { HUNGER } from '../config';
 import type { Hole } from '../sim/Hole.ts';
 import { FONT } from './dom';
 
@@ -18,7 +17,7 @@ export function shortNumber(n: number): string {
 
 /** A hole's points as shown on the live board: the mass it has grown by over its start. */
 export function liveScore(hole: Hole): number {
-  return Math.max(0, hole.mass - hole.startMass) * HUNGER.pointsPerMass;
+  return hole.livePoints;
 }
 
 /** One row of the live board. */

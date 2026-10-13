@@ -75,6 +75,15 @@ export class LeaderboardPanel {
     // textContent, never innerHTML: nicknames come from other players.
     name.textContent = e.nickname;
     Object.assign(name.style, { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' });
+    if (e.offline) {
+      // The best run was played in an offline arena (bots only).
+      const tag = document.createElement('span');
+      tag.textContent = ' OFFLINE';
+      tag.title = 'Played in the offline arena';
+      tag.dataset.testid = 'offline-tag';
+      Object.assign(tag.style, { fontSize: '10px', letterSpacing: '0.15em', opacity: '0.5' });
+      name.append(tag);
+    }
     const score = document.createElement('span');
     score.textContent = e.score.toLocaleString('en-US');
     score.style.fontVariantNumeric = 'tabular-nums';

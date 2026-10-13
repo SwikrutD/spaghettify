@@ -6,6 +6,9 @@ export interface BoardEntry {
   nickname: string;
   score: number;
   tier: number;
+  holes?: number;
+  /** The best run was played in an offline arena (bots only). */
+  offline?: boolean;
 }
 export interface TopList {
   entries: BoardEntry[];

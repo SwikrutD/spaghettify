@@ -212,7 +212,7 @@ function handleEvents(): void {
 // Life over (offline): score = peak mass gained (scaled to points), shown with the biggest meal and the size reached.
 function endRun(died: DiedEvent): void {
   const score = local.score;
-  const stats = runStats(score, local.biggestEaten, local.milestone, local.eatenCount, local.holesEaten, died.cause === 'eaten' ? died.byName : null, local.hunger.runTime);
+  const stats = runStats(score, local.biggestEaten, local.milestone, local.eatenCount, local.holesEaten, died.cause === 'eaten' ? died.byName : null, local.hunger.runTime, false);
   showScore(stats);
   void postRunToBoard(scoreScreen.board, stats, title.nicknameValue);
   track('run-end', {
@@ -220,6 +220,7 @@ function endRun(died: DiedEvent): void {
     tier: local.milestone + 1,
     seconds: Math.round(local.hunger.runTime),
     eaten: local.eatenCount,
+    holes: local.holesEaten,
     newBest: stats.newBest,
     cause: died.cause,
     online: false,
@@ -230,7 +231,7 @@ function endRun(died: DiedEvent): void {
 function endOnlineLife(over: OverMessage): void {
   if (!online) return;
   const milestone = Math.max(0, Math.min(MILESTONES.length - 1, over.milestone - 1));
-  const stats = runStats(over.score, over.biggest, milestone, over.eaten, over.holesEaten, over.cause === 'eaten' ? over.byName : null, over.seconds);
+  const stats = runStats(over.score, over.biggest, milestone, over.eaten, over.holesEaten, over.cause === 'eaten' ? over.byName : null, over.seconds, true);
   showScore(stats);
   const { name, named, refused } = online.welcome;
   void showServerLife(scoreScreen.board, stats, over.posted, name, named, refused);
@@ -239,6 +240,7 @@ function endOnlineLife(over: OverMessage): void {
     tier: over.milestone,
     seconds: Math.round(over.seconds),
     eaten: over.eaten,
+    holes: over.holesEaten,
     newBest: stats.newBest,
     cause: over.cause,
     online: true,
@@ -246,7 +248,7 @@ function endOnlineLife(over: OverMessage): void {
 }
 
 /** A life's stats for the score screen; keeps the best score on this device. */
-function runStats(score: number, biggest: Meal | null, milestone: number, eaten: number, holesEaten: number, eatenBy: string | null, seconds: number): RunStats {
+function runStats(score: number, biggest: Meal | null, milestone: number, eaten: number, holesEaten: number, eatenBy: string | null, seconds: number, online: boolean): RunStats {
   const previous = loadBest();
   const newBest = score > previous;
   if (newBest) saveBest(score);
@@ -261,6 +263,7 @@ function runStats(score: number, biggest: Meal | null, milestone: number, eaten:
     holesEaten,
     eatenBy,
     seconds,
+    online,
   };
 }
 
@@ -445,7 +448,7 @@ function closeSettings(): void {
 }
 
 /** Play the offline arena: from the title (a fresh life there) or after a life (respawn). `note` says why it is offline. */
-function playOffline(from: 'title' | 'restart', note: string | null): void {
+function playOffline(from: 'title' | 'restart', note: string | null, why: string): void {
   if (from === 'title') {
     local.name = nameForRun();
     title.hide();
@@ -455,6 +458,7 @@ function playOffline(from: 'title' | 'restart', note: string | null): void {
     refreshMenus();
   }
   if (note) netStatus.showNote(note);
+  track('join', { online: false, why, from });
   track('run-start', { from, online: false });
 }
 
@@ -499,7 +503,7 @@ async function joinOnline(from: 'title' | 'restart'): Promise<void> {
   title.setConnecting(false);
   if ('failed' in result) {
     if (result.failed === 'version' && reloadForNewVersion()) return;
-    playOffline(from, joinFailedNote(result.failed));
+    playOffline(from, joinFailedNote(result.failed), result.failed);
     return;
   }
   startOnline(result.client, result.welcome, from);
@@ -524,6 +528,7 @@ function startOnline(client: NetClient, welcome: WelcomeMessage, from: 'title' |
       scoreScreen.hide();
       setMode('playing');
       if (welcome.refused) netStatus.showNote(`That nickname is not allowed here. You play as ${welcome.name}.`);
+      track('join', { online: true, why: 'ok', from });
       track('run-start', { from, online: true });
     } else {
       track('run-start', { from: 'restart', online: true });
@@ -558,7 +563,7 @@ function onlineEnded(arena: OnlineArena, why: NetEnd): void {
   if (why === 'version' && reloadForNewVersion()) return;
   if (!entered) {
     // Welcomed, then dropped before the first snapshot: as if the join failed.
-    playOffline(title.isVisible ? 'title' : 'restart', joinFailedNote(why));
+    playOffline(title.isVisible ? 'title' : 'restart', joinFailedNote(why), why);
     return;
   }
   rejoin = !offlineOnly;
@@ -606,14 +611,14 @@ function carryOver(from: Hole): void {
 
 /** Swallowed online as the connection dropped (the server's account never came): the score screen from what this client saw. */
 function endDroppedLife(hole: Hole): void {
-  const stats = runStats(hole.score, hole.biggestEaten, hole.milestone, hole.eatenCount, hole.holesEaten, hole.eatenByName || null, hole.hunger.runTime);
+  const stats = runStats(hole.score, hole.biggestEaten, hole.milestone, hole.eatenCount, hole.holesEaten, hole.eatenByName || null, hole.hunger.runTime, true);
   showScore(stats);
   scoreScreen.board.clear();
   scoreScreen.board.setStatus('The connection dropped. The server scored this life as it stood.');
 }
 
 title.onPlay = () => {
-  if (offlineOnly) playOffline('title', null);
+  if (offlineOnly) playOffline('title', null, 'offline-mode');
   else void joinOnline('title');
 };
 title.onShow = () => {
