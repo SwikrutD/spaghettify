@@ -222,3 +222,22 @@ export function packTimer(seconds: number): number {
 export function unpackTimer(u: number): number {
   return u / 50;
 }
+
+/**
+ * A timer the sim counts down by `dt` a step (`t = max(0, t - dt)`), exact to the step, in a byte: 0 when it is not
+ * running, else 1 + the steps it stays above zero (up to 254). The value decoded is half a step past that many steps,
+ * so a copy counted down the same way runs out on the very step the original does, whether its rule reads the timer
+ * before or after counting it down. The own hole's stun and invulnerability need this: a bounce predicted a step early
+ * or late is a visible correction.
+ */
+export function packSteps(seconds: number, dt: number): number {
+  if (seconds <= 0) return 0;
+  let steps = 0;
+  let t = seconds;
+  while (steps < 253 && (t = Math.max(0, t - dt)) > 0) steps++;
+  return steps + 1;
+}
+
+export function unpackSteps(u: number, dt: number): number {
+  return u === 0 ? 0 : (u - 0.5) * dt;
+}

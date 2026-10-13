@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
-import { DISK, PREY, SPAGHETTI } from '../config';
+import { CAMERA, DISK, PREY, SPAGHETTI, SURFACE } from '../config';
 import { canSwallow, sizeWeight, type Body } from '../sim/body.ts';
 import { lerp, smooth, smoothstep } from '../sim/math.ts';
 import { hash01 } from '../sim/rng.ts';
@@ -85,6 +85,12 @@ const tmpOffset = new THREE.Vector3();
 const tmpAxis = new THREE.Vector3();
 const tmpColor = new THREE.Color();
 const UP = new THREE.Vector3(0, 1, 0);
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const tmpNod = new THREE.Quaternion();
+const tmpRoll = new THREE.Quaternion();
+/** The camera's tilt and view direction: a round body's pole points up the screen (see SURFACE). */
+const TILT = THREE.MathUtils.degToRad(CAMERA.tiltDegrees);
+const VIEW_DIR = new THREE.Vector3(0, -Math.sin(TILT), -Math.cos(TILT));
 
 export type PreyShape = 'rock' | 'rockLow' | 'rockTiny' | 'sphere';
 
@@ -109,6 +115,9 @@ export class PreyMesh {
   private readonly glowAttr: THREE.InstancedBufferAttribute;
   /** Per instance: heat of the body itself 0..1 (shed debris). */
   private readonly heatAttr: THREE.InstancedBufferAttribute;
+  /** Spheres only, per instance: surface kind (SURFACE.kinds) and a 0..1 variation. */
+  private readonly surfaceAttr: THREE.InstancedBufferAttribute | null = null;
+  private readonly round: boolean;
 
   constructor(capacity: number, shape: PreyShape = 'rock') {
     this.capacity = capacity;
@@ -126,6 +135,12 @@ export class PreyMesh {
     geometry.setAttribute('aHole', this.holeAttr);
     geometry.setAttribute('aGlow', this.glowAttr);
     geometry.setAttribute('aHeat', this.heatAttr);
+    this.round = shape === 'sphere';
+    if (this.round) {
+      this.surfaceAttr = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 2), 2);
+      this.surfaceAttr.setUsage(THREE.DynamicDrawUsage);
+      geometry.setAttribute('aSurface', this.surfaceAttr);
+    }
 
     this.mesh = new THREE.InstancedMesh(geometry, createPreyMaterial(shape === 'sphere'), capacity);
     this.mesh.frustumCulled = false;
@@ -217,11 +232,23 @@ export class PreyMesh {
     const { hue, sat, light } = obj.color;
     tmpColor.setHSL(lerp(hue[0], hue[1], hash01(seed, 0)), lerp(sat[0], sat[1], hash01(seed, 1)), lerp(light[0], light[1], hash01(seed, 2)));
     this.mesh.setColorAt(i, tmpColor);
-    tmpAxis.set(hash01(seed, 3) - 0.5, hash01(seed, 4) - 0.5, hash01(seed, 5) - 0.5);
-    if (tmpAxis.lengthSq() < 1e-4) tmpAxis.set(0, 1, 0);
-    tmpAxis.normalize();
-    const angle = hash01(seed, 6) * Math.PI * 2 + (hash01(seed, 7) * 2 - 1) * PREY.spinSpeed * frame.time;
-    tmpQuat.setFromAxisAngle(tmpAxis, angle);
+    if (this.round) {
+      // A planet turns about its own pole, which points up the screen give or take a tip, so its bands run across.
+      const surface = this.surfaceAttr!.array as Float32Array;
+      surface[i * 2] = SURFACE.kinds[obj.className] ?? 0;
+      surface[i * 2 + 1] = hash01(seed, 8);
+      const angle = hash01(seed, 6) * Math.PI * 2 + (hash01(seed, 7) * 2 - 1) * SURFACE.spinSpeed * frame.time;
+      tmpQuat.setFromAxisAngle(UP, angle);
+      tmpNod.setFromAxisAngle(X_AXIS, -TILT + (hash01(seed, 4) * 2 - 1) * SURFACE.nod);
+      tmpRoll.setFromAxisAngle(VIEW_DIR, (hash01(seed, 3) * 2 - 1) * SURFACE.roll);
+      tmpQuat.premultiply(tmpNod).premultiply(tmpRoll);
+    } else {
+      tmpAxis.set(hash01(seed, 3) - 0.5, hash01(seed, 4) - 0.5, hash01(seed, 5) - 0.5);
+      if (tmpAxis.lengthSq() < 1e-4) tmpAxis.set(0, 1, 0);
+      tmpAxis.normalize();
+      const angle = hash01(seed, 6) * Math.PI * 2 + (hash01(seed, 7) * 2 - 1) * PREY.spinSpeed * frame.time;
+      tmpQuat.setFromAxisAngle(tmpAxis, angle);
+    }
     tmpScale.setScalar(Math.max(scale, 1e-4));
     tmpMat.compose(tmpPos, tmpQuat, tmpScale);
     this.mesh.setMatrixAt(i, tmpMat);
@@ -244,7 +271,9 @@ export class PreyMesh {
       [this.holeAttr, 3],
       [this.glowAttr, 1],
       [this.heatAttr, 1],
+      [this.surfaceAttr, 2],
     ] as const) {
+      if (!attr) continue;
       attr.clearUpdateRanges();
       attr.addUpdateRange(0, this.count * size);
       attr.needsUpdate = true;

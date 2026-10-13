@@ -62,7 +62,7 @@ export class OnlineArena {
     this.reach = reach;
     this.dt = 1 / welcome.tickRate;
     this.mirror = new ArenaMirror(welcome.seed, welcome.hole, welcome.name);
-    this.prediction = new Prediction(this.mirror.local, welcome.tick);
+    this.prediction = new Prediction(this.mirror.local, welcome.tick, this.mirror.world.dangers);
     this.clock = new ServerClock(welcome.tickRate);
   }
 

@@ -4,10 +4,15 @@ import stretchParsVert from '../shaders/preySpaghettify.pars.vert.glsl';
 import stretchVert from '../shaders/preySpaghettify.vert.glsl';
 import glowParsFrag from '../shaders/preyGlow.pars.frag.glsl';
 import glowFrag from '../shaders/preyGlow.frag.glsl';
+import surfaceParsVert from '../shaders/preySurface.pars.vert.glsl';
+import surfaceVert from '../shaders/preySurface.vert.glsl';
+import surfaceParsFrag from '../shaders/preySurface.pars.frag.glsl';
+import surfaceFrag from '../shaders/preySurface.frag.glsl';
 
 /**
  * Lit prey material with tidal stretching (spaghettification) in the vertex shader. `smooth` is for the round
- * bodies (smooth shading, normals bent with the stretch); otherwise flat-shaded rock.
+ * bodies (smooth shading, normals bent with the stretch, and a procedural surface per class from the per-instance
+ * `aSurface`, see preySurface.pars.frag.glsl); otherwise flat-shaded rock.
  * Stays opaque: prey must write alpha 1, the lensing pass uses scene alpha as its play-plane mask.
  * Reads the per-instance attributes `aStretch` (vec4), `aHole` (vec3) and `aGlow` and `aHeat` (floats), see preySpaghettify.pars.vert.glsl.
  */
@@ -34,6 +39,12 @@ export function createPreyMaterial(smooth = false): THREE.MeshStandardMaterial {
       '#include <emissivemap_fragment>',
       `#include <emissivemap_fragment>\n${glowFrag}`,
     );
+    if (smooth) {
+      shader.vertexShader = inject(shader.vertexShader, '#include <common>', `#include <common>\n${surfaceParsVert}`);
+      shader.vertexShader = inject(shader.vertexShader, '#include <begin_vertex>', `#include <begin_vertex>\n${surfaceVert}`);
+      shader.fragmentShader = inject(shader.fragmentShader, '#include <common>', `#include <common>\n${surfaceParsFrag}`);
+      shader.fragmentShader = inject(shader.fragmentShader, '#include <color_fragment>', `#include <color_fragment>\n${surfaceFrag}`);
+    }
   };
   material.customProgramCacheKey = () => (smooth ? 'prey-spaghettify-smooth' : 'prey-spaghettify');
   return material;

@@ -24,7 +24,7 @@ import type { Meal } from '../sim/Hole.ts';
 import { Reader, Writer } from './wire.ts';
 
 /** Bumped whenever a message changes shape. The server turns away a client of another version. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 
 /** First byte of a binary frame. */
 export const BINARY = {

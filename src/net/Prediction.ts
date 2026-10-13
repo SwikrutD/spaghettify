@@ -3,6 +3,7 @@ import { decodeInput, encodeInput, type InputFrame } from '../protocol/messages.
 import type { NetYou } from '../protocol/snapshot.ts';
 import { Writer } from '../protocol/wire.ts';
 import { clampToArena, edgePush } from '../sim/arena.ts';
+import type { Dangers } from '../sim/Dangers.ts';
 import { responsiveness, topSpeed, viewDistance, type Hole } from '../sim/Hole.ts';
 import { vec2 } from '../sim/vec.ts';
 
@@ -13,7 +14,8 @@ const MASK = RING - 1;
 /**
  * Client-side prediction of the own hole. The hole runs the same 60 Hz Hole.move as the server, steered by the
  * input as it was sent (each message holds until the next, as on the server) and pulled by what the server last
- * said pulls it (the gas wall worked out here, where the hole is). Every snapshot puts the hole back where the
+ * said pulls it (the gas wall worked out here, where the hole is) and pushed off or knocked back by the bodies and
+ * grains the client knows, as the server does it (Dangers.collide). Every snapshot puts the hole back where the
  * server had it and replays the steps predicted since then; whatever moved is a correction, faded out over
  * NET_CLIENT.correctionTime (a big one snaps).
  *
@@ -52,9 +54,13 @@ export class Prediction {
   private readonly writer = new Writer(16);
   private readonly frame: InputFrame = { seq: 0, x: 0, z: 0 };
 
-  constructor(hole: Hole, tick: number) {
+  /** Contacts with the bodies and grains the client knows (the mirror world's rules), or null to leave them to the server. */
+  private readonly dangers: Dangers | null;
+
+  constructor(hole: Hole, tick: number, dangers: Dangers | null = null) {
     this.hole = hole;
     this.tick = tick;
+    this.dangers = dangers;
   }
 
   /**
@@ -209,7 +215,10 @@ export class Prediction {
     return this.sentSeq[i] === seq ? this.sentStep[i] : null;
   }
 
-  /** Step q of the hole, as the server steps a hole: timers, pull (the wall where it is), Hole.move, the hard edge. */
+  /**
+   * Step q of the hole, as the server steps a hole: timers, pull (the wall where it is), contacts with the bodies
+   * and grains it cannot eat (a bounce starts here, not a round trip later), Hole.move, the hard edge.
+   */
   private advance(q: number, dt: number): void {
     const h = this.hole;
     h.capture();
@@ -221,6 +230,7 @@ export class Prediction {
     edgePush(h.position.x, h.position.z, h.radius, responsiveness(h.radius) * topSpeed(h.radius), this.edge);
     h.pull.x = this.bodyPull.x + this.edge.x;
     h.pull.z = this.bodyPull.z + this.edge.z;
+    this.dangers?.collide(h);
     h.move(dt);
     clampToArena(h);
   }

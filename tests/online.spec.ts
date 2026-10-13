@@ -150,14 +150,17 @@ test('online: two players in one room see each other, one eats the other (the se
     const url = `/?server=ws://127.0.0.1:${port}/ws`;
     const a = await openClient(browser, url, 'Alpha', app);
     const b = await openClient(browser, url, 'Beta', app);
-    // (Refreshed every 10 s: a first answer lost to a busy test machine comes with the next.)
-    await expect(a.page.getByTestId('title-online')).toHaveText('0 PLAYERS ONLINE', { timeout: 15_000 });
+    // The title shows no player count (only a line when it will play offline).
+    await expect(a.page.getByTestId('title-online')).toHaveText('');
     const ida = await joinRoom(a.page);
     const idb = await joinRoom(b.page);
     expect(app.arena.rooms).toHaveLength(1);
     expect(app.arena.players).toBe(2);
     await expect(a.page.getByTestId('net-status')).toContainText('ONLINE');
-    // The status line gets the players in the room from the live board and the round trip from the pings.
+    // The status line gets the round trip from the pings, and the players in the room from the live board only with
+    // the setting on (off by default).
+    await expect(a.page.getByTestId('net-status')).toHaveText(/^ONLINE · \d+ MS$/, { timeout: 10_000 });
+    await a.page.evaluate(() => window.__spaghettify.settings.setShowPlayers(true));
     await expect(a.page.getByTestId('net-status')).toContainText(/2 PLAYERS · \d+ MS/, { timeout: 10_000 });
 
     // They spawned out of each other's sight: bring Beta near Alpha on the server, Alpha well bigger.
@@ -260,7 +263,7 @@ test('online: Play falls back to the offline arena when the server is unreachabl
     taken.send(JSON.stringify({ t: 'join', v: PROTOCOL_VERSION, rules: rulesHash(), name: 'First' }));
     await welcomed;
     const full = await openClient(browser, `/?server=ws://127.0.0.1:${port}/ws`, 'Pea', app);
-    await expect(full.page.getByTestId('title-online')).toHaveText('1 PLAYER ONLINE', { timeout: 15_000 });
+    await expect(full.page.getByTestId('title-online')).toHaveText('');
     await full.page.getByTestId('play').dispatchEvent('click');
     await full.page.waitForFunction(() => window.__spaghettify.mode === 'playing', undefined, { timeout: 20_000 });
     const note = await full.page.evaluate(() => ({ note: window.__spaghettify.net.note, state: window.__spaghettify.net.state }));

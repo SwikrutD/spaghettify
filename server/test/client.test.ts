@@ -50,6 +50,9 @@ class Wire implements Link {
       },
       reach,
     );
+    // A calm room's client predicts no contacts either, and no grains to bump into (the real server always has both).
+    this.arena.world.dangers.enabled = this.room.world.dangers.enabled;
+    this.arena.world.field.enabled = this.room.world.field.enabled;
     return this.arena;
   }
 
@@ -229,6 +232,47 @@ test('prediction: a stall (a hidden tab) and a teleport are caught up without a 
   run(room, [wire], 30, steer);
   assert.equal(arena.prediction.snaps, snaps + 1);
   assert.ok(Math.abs(arena.local.position.x - hole.position.x) < 5);
+});
+
+/**
+ * The own hole flies into a planet and keeps pushing into it for 3 s (hit, knocked back, stunned, back in while
+ * invulnerable, hit again): the biggest correction any snapshot made, the snaps and the server's hits. `predict` false
+ * leaves the contacts to the server, as before M22.
+ */
+function bounce(predict: boolean): { worst: number; snaps: number; hits: number } {
+  const room = makeRoom(407);
+  room.world.field.enabled = false;
+  const wire = new Wire(room, { up: 4, down: 5, jitter: 1 }, 8);
+  const arena = wire.join('Alpha');
+  arena.world.dangers.enabled = predict;
+  const hole = room.world.hole(arena.local.id)!;
+  hole.hunger.enabled = false;
+  const still = (): [number, number] => [0, 0];
+  // Every body respawns out of sight; then one planet a few radii to the right of the hole.
+  for (const body of room.world.prey.objects) body.position.x += 1e6;
+  run(room, [wire], 30, still);
+  const planet = room.world.prey.objects[0];
+  planet.state = 'alive';
+  planet.radius = 6;
+  planet.position.x = hole.position.x + 14;
+  planet.position.z = hole.position.z + 1;
+  run(room, [wire], 30, still);
+  assert.equal(arena.world.prey.objects[0].state, 'alive', 'the client knows the planet');
+  let worst = 0;
+  run(room, [wire], 180, () => [1, 0], () => (worst = Math.max(worst, arena.prediction.lastError)));
+  return { worst, snaps: arena.prediction.snaps, hits: hole.hits };
+}
+
+test('prediction: the own hole bounces off a planet at once, as the server does, instead of being put back later', () => {
+  const predicted = bounce(true);
+  const late = bounce(false);
+  // Hit more than once on the server either way (the hole keeps steering into the planet).
+  assert.ok(predicted.hits >= 2 && late.hits >= 2, `hits ${predicted.hits} and ${late.hits}`);
+  assert.equal(predicted.snaps, 0);
+  // Without predicting the contacts, every hit is a correction of a round trip of the knockback (units) ...
+  assert.ok(late.worst > 1, `late correction ${late.worst}`);
+  // ... with them, only the pull changing across the replay (hundredths of a unit).
+  assert.ok(predicted.worst < 0.1, `predicted correction ${predicted.worst}`);
 });
 
 test('other holes are drawn in the past, smoothly between snapshots, and the own hole sees them by name', () => {

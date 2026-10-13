@@ -75,7 +75,7 @@ Rough guide for choosing: Sonnet 5.5 at medium for scaffolding, UI, audio and de
 
 ## Menus and settings
 
-- Title screen: play button, best score, nickname entry, online status (players online, or offline arena)
+- Title screen: play button, best score, nickname entry, and a line only when it will play the offline arena (no player count; a setting shows the players in the room on the in-game status line)
 - Pause menu: online there is no real pause (the arena keeps running); Escape opens a menu with settings and leave arena. The offline arena still pauses, including on tab blur.
 - Settings panel: separate music and SFX volume sliders, control scheme (including the mobile finger follow or joystick toggle) and quality level
 - No first-run tutorial overlay for now; the first seconds of play should teach the loop
@@ -84,7 +84,7 @@ Rough guide for choosing: Sonnet 5.5 at medium for scaffolding, UI, audio and de
 ## Controls
 
 - Desktop: mouse follow (the hole drifts toward the pointer). Keyboard (WASD or arrows) as an alternative is welcome.
-- Mobile: touch with a toggle in the settings between finger follow and a virtual joystick. Remember the choice in localStorage.
+- Mobile: touch with a toggle in the settings between finger follow and a virtual joystick (the default). Remember the choice in localStorage.
 - Gamepad support: left stick to move.
 - All input goes through one input abstraction that outputs a desired movement vector, so game logic never reads a device directly.
 

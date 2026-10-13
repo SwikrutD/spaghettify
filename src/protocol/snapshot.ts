@@ -25,7 +25,11 @@ import type { Hole, Meal } from '../sim/Hole.ts';
 import type { RunPhase } from '../sim/Hunger.ts';
 import { ARENA_CLASSES } from '../sim/milestones.ts';
 import { BINARY } from './messages.ts';
-import { packLog, packTimer, packUnit, Reader, unpackLog, unpackTimer, unpackUnit, type Writer } from './wire.ts';
+import { SIM } from '../config/index.ts';
+import { packLog, packSteps, packTimer, packUnit, Reader, unpackLog, unpackSteps, unpackTimer, unpackUnit, type Writer } from './wire.ts';
+
+/** Seconds per sim step (the own hole's timers are sent in steps). */
+const STEP = 1 / SIM.tickRate;
 
 /** Kinds of pooled body a body record is about; `slot` indexes that pool (the same size on every side). */
 export const BODY_KIND = {
@@ -202,10 +206,11 @@ export function writeYou(w: Writer, hole: Hole): void {
   w.f32(hole.mass);
   w.u16(packLog(hole.eatenMass));
   w.u8(packUnit(hole.hunger.level));
-  w.u8(packTimer(hole.stun));
-  w.u8(packTimer(hole.invulnerable));
-  w.u8(packTimer(hole.protection));
-  w.u8(packTimer(hole.shrink));
+  // The timers to the step (the client predicts with them).
+  w.u8(packSteps(hole.stun, STEP));
+  w.u8(packSteps(hole.invulnerable, STEP));
+  w.u8(packSteps(hole.protection, STEP));
+  w.u8(packSteps(hole.shrink, STEP));
   if (eaten) writeEaten(w, hole);
 }
 
@@ -450,10 +455,10 @@ function readYou(r: Reader): NetYou {
     mass: r.f32(),
     eatenMass: unpackLog(r.u16()),
     hunger: unpackUnit(r.u8()),
-    stun: unpackTimer(r.u8()),
-    invulnerable: unpackTimer(r.u8()),
-    protection: unpackTimer(r.u8()),
-    shrink: unpackTimer(r.u8()),
+    stun: unpackSteps(r.u8(), STEP),
+    invulnerable: unpackSteps(r.u8(), STEP),
+    protection: unpackSteps(r.u8(), STEP),
+    shrink: unpackSteps(r.u8(), STEP),
     eatenBy: -1,
     eatProgress: 0,
     eatOffsetX: 0,

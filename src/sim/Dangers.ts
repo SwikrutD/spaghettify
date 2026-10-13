@@ -40,6 +40,8 @@ export class Dangers {
   private authority = 0;
   private ax = 0;
   private az = 0;
+  /** True while `collide` runs: hits change the hole only. */
+  private predicting = false;
   private readonly edge = vec2();
   /** A grain seen as a body, for contact. */
   private readonly grainBody: Body = createBody({ hue: [0, 0], sat: [0, 0], light: [0, 0] });
@@ -86,10 +88,37 @@ export class Dangers {
     hole.pull.x += this.edge.x;
     hole.pull.z += this.edge.z;
 
+    this.touchBodies(hole, speed);
+    for (const comet of this.world.comets.objects) {
+      if (!comet.active || comet.state !== 'alive' || canSwallow(comet.radius, hole.radius)) continue;
+      const v = Math.hypot(comet.velocity.x, comet.velocity.z);
+      const along = v > 1e-6 ? COMETS.knockAlongTravel / v : 0;
+      this.contact(hole, comet, comet.velocity.x * along, comet.velocity.z * along, speed, 'comet');
+    }
+    this.hole = null;
+  }
+
+  /**
+   * The online client's prediction of its own hole, before its step moves it: the contacts with the bodies and grains
+   * the client was told about, at the hole's current place, exactly as the server makes them (the push out, and a hit's
+   * knockback, stun, invulnerability and shed), so the hole bounces off at once instead of sliding into the body until
+   * the server's snapshot puts it back. A predicted hit adds no events, debris or counts: those come from the server.
+   * Comets are left to the server (the client only knows where they were a moment ago).
+   */
+  collide(hole: Hole): void {
+    if (!this.enabled || hole.absent) return;
+    this.hole = hole;
+    this.predicting = true;
+    this.touchBodies(hole, topSpeed(hole.radius));
+    this.predicting = false;
+    this.hole = null;
+  }
+
+  /** Contacts with the arena bodies and the grains the hole cannot eat. */
+  private touchBodies(hole: Hole, speed: number): void {
+    this.speed = speed;
     const prey = this.world.prey;
-    const x = hole.position.x;
-    const z = hole.position.z;
-    const n = prey.query(x, z, hole.radius * DANGER.bodyPad, DANGER.bodyPad);
+    const n = prey.query(hole.position.x, hole.position.z, hole.radius * DANGER.bodyPad, DANGER.bodyPad);
     for (let k = 0; k < n; k++) {
       const body = prey.objects[prey.found[k]];
       if (body.state === 'alive' && !canSwallow(body.radius, hole.radius)) this.contact(hole, body, 0, 0, speed, 'body');
@@ -99,13 +128,6 @@ export class Dangers {
       if (layer.def.radius[1] < hole.radius * PREY.edibleRatio) continue;
       field.forEach(layer.index, hole.position.x, hole.position.z, hole.radius * DANGER.bodyPad, DANGER.bodyPad, this.onGrainContact);
     }
-    for (const comet of this.world.comets.objects) {
-      if (!comet.active || comet.state !== 'alive' || canSwallow(comet.radius, hole.radius)) continue;
-      const v = Math.hypot(comet.velocity.x, comet.velocity.z);
-      const along = v > 1e-6 ? COMETS.knockAlongTravel / v : 0;
-      this.contact(hole, comet, comet.velocity.x * along, comet.velocity.z * along, speed, 'comet');
-    }
-    this.hole = null;
   }
 
   /** Sum of the pulls of every body and grain big enough, capped at DANGER.pullMax of the steering authority. */
@@ -189,6 +211,7 @@ export class Dangers {
     // Shed mass, never below the start mass (which is above the evaporation mass, so a hit alone never ends a life).
     const radius = hole.radius;
     const shed = hole.shed(DANGER.shedFraction);
+    if (this.predicting) return;
     hole.shedMass += shed;
     hole.hits++;
     const world = this.world;

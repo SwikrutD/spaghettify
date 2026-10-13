@@ -652,15 +652,14 @@ scoreScreen.onRestart = () => {
   }
 };
 
-/** Players online, on the title screen; or that the game plays offline. */
+/** On the title screen, only when the game will play offline (no player count since M22; the status line in game shows it if the setting is on). */
 async function refreshOnline(): Promise<void> {
   if (offlineOnly) {
     title.setOnline('OFFLINE ARENA');
     return;
   }
   const info = await fetchOnline();
-  if (!info) title.setOnline('SERVER UNREACHABLE: OFFLINE ARENA');
-  else title.setOnline(`${info.players} ${info.players === 1 ? 'PLAYER' : 'PLAYERS'} ONLINE`);
+  title.setOnline(info ? '' : 'SERVER UNREACHABLE: OFFLINE ARENA');
 }
 window.setInterval(() => {
   if (title.isVisible) void refreshOnline();
@@ -901,7 +900,7 @@ function updateTags(): void {
   nameTags.setVisible(showing);
   if (online) {
     const board = online.board;
-    netStatus.online(board ? board.players : null, net?.rtt ?? null);
+    netStatus.online(board && settings.showPlayers ? board.players : null, net?.rtt ?? null);
   } else if (joining) {
     netStatus.connecting();
   } else {

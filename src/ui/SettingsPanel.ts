@@ -3,7 +3,7 @@ import { QUALITY, type QualityChoice } from '../config';
 import type { ControlScheme, Settings } from '../settings/Settings';
 import { button, FONT, overlay, show } from './dom';
 
-/** Settings: music and SFX volume, mute, control scheme and quality. Reachable from the title screen and the pause menu. */
+/** Settings: music and SFX volume, mute, control scheme, quality and the players online line (in game, online). Reachable from the title screen and the pause menu. */
 export class SettingsPanel {
   onClose: (() => void) | null = null;
   private readonly root = overlay('settings-panel', 30);
@@ -12,6 +12,7 @@ export class SettingsPanel {
   private readonly mute = button('', 'mute-toggle');
   private readonly scheme = document.createElement('select');
   private readonly quality = document.createElement('select');
+  private readonly players = document.createElement('input');
   private visible = false;
 
   constructor(
@@ -52,13 +53,18 @@ export class SettingsPanel {
     });
     this.music.input.addEventListener('input', () => this.audio.setMusic(Number(this.music.input.value)));
     this.sfx.input.addEventListener('input', () => this.audio.setSfx(Number(this.sfx.input.value)));
+    this.players.type = 'checkbox';
+    this.players.dataset.testid = 'show-players';
+    this.players.setAttribute('aria-label', 'Show players online');
+    Object.assign(this.players.style, { width: '18px', height: '18px', margin: '0', accentColor: '#ffb070' });
+    this.players.addEventListener('change', () => this.settings.setShowPlayers(this.players.checked));
     this.scheme.addEventListener('change', () => this.settings.setScheme(this.scheme.value as ControlScheme));
     this.quality.addEventListener('change', () => this.settings.setQuality(this.quality.value as QualityChoice));
 
     const back = button('BACK', 'settings-back', true);
     back.addEventListener('click', () => this.onClose?.());
 
-    box.append(title, this.music.row, this.sfx.row, this.mute, row('Controls', this.scheme), row('Quality', this.quality), back);
+    box.append(title, this.music.row, this.sfx.row, this.mute, row('Controls', this.scheme), row('Quality', this.quality), row('Show players online', this.players), back);
     this.root.append(box);
     parent.append(this.root);
 
@@ -90,6 +96,7 @@ export class SettingsPanel {
     this.mute.setAttribute('aria-pressed', String(a.muted));
     this.scheme.value = this.settings.scheme;
     this.quality.value = this.settings.quality;
+    this.players.checked = this.settings.showPlayers;
   }
 }
 

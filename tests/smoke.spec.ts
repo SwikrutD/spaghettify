@@ -1152,20 +1152,23 @@ test('settings: scheme, quality and volume persist across a reload and keyboard 
   await page.getByTestId('quality').selectOption('low');
   await page.getByTestId('music-volume').fill('0.25');
   await page.getByTestId('sfx-volume').fill('0.5');
+  await expect(page.getByTestId('show-players')).not.toBeChecked();
+  await page.getByTestId('show-players').check();
   await page.getByTestId('settings-back').click();
   await expect(page.getByTestId('title-screen')).toBeVisible();
-  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}'))).toEqual({ scheme: 'keyboard', quality: 'low' });
+  expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}'))).toEqual({ v: 2, scheme: 'keyboard', quality: 'low', showPlayers: true });
 
   // Persisted values are applied after a reload and shown in the panel.
   await page.reload();
   await page.waitForFunction(() => window.__spaghettify?.frames > 5);
-  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'keyboard', quality: 'low' });
+  expect(await page.evaluate(() => window.__spaghettify.settings)).toMatchObject({ scheme: 'keyboard', quality: 'low', showPlayers: true });
   expect(await page.evaluate(() => window.__spaghettify.qualityLevel)).toBe(6);
   await page.getByTestId('title-settings').click();
   await expect(page.getByTestId('control-scheme')).toHaveValue('keyboard');
   await expect(page.getByTestId('quality')).toHaveValue('low');
   await expect(page.getByTestId('music-volume')).toHaveValue('0.25');
   await expect(page.getByTestId('sfx-volume')).toHaveValue('0.5');
+  await expect(page.getByTestId('show-players')).toBeChecked();
   await page.getByTestId('settings-back').click();
 
   // Keyboard only: the pointer no longer steers, the keys do.
@@ -1279,26 +1282,33 @@ test.describe('touch and gamepad', () => {
     };
   }
 
-  test('touch device defaults to finger follow, menus work by tap and the hole follows the finger', async ({ page }) => {
+  test('touch device defaults to the joystick (also over a finger follow stored before M22), menus work by tap and a drag steers', async ({ page }) => {
     const errors: string[] = [];
     page.on('console', (m) => {
       if (m.type() === 'error') errors.push(m.text());
     });
     page.on('pageerror', (e) => errors.push(e.message));
+    // Settings stored by an older build, when finger follow was only the default.
+    await page.addInitScript(() => localStorage.setItem('spaghettify.settings', JSON.stringify({ quality: 'high', scheme: 'finger' })));
     await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
-    expect(await page.evaluate(() => window.__spaghettify.settings.scheme)).toBe('finger');
+    expect(await page.evaluate(() => window.__spaghettify.settings.scheme)).toBe('joystick');
     await page.getByTestId('play').tap();
     await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
 
-    // Finger to the right of centre: drift right. Lifting the finger stops the steering.
-    const t = await touchStart(page, 560, 180);
+    // Touch down left of centre without dragging: a finger-follow scheme would steer left, the joystick must not move.
+    const t = await touchStart(page, 120, 280);
+    await page.waitForTimeout(800);
+    expect(Math.abs(await page.evaluate(() => window.__spaghettify.player.position.x))).toBeLessThan(0.05);
+    await expect(page.getByTestId('joystick-base')).toBeVisible();
+
+    // Drag right: the hole moves right. Drag up: it moves toward screen up (-Z).
+    await t.move(200, 280);
     await page.waitForFunction(() => window.__spaghettify.player.position.x > 0.5);
-    expect(await page.evaluate(() => window.__spaghettify.touch.touching)).toBe(true);
-    expect(await page.evaluate(() => window.__spaghettify.input.move.x)).toBeGreaterThan(0.5);
+    await t.move(120, 200);
+    await page.waitForFunction(() => window.__spaghettify.player.position.z < -0.5);
     await t.end();
-    await page.waitForFunction(() => !window.__spaghettify.touch.touching);
-    await page.waitForFunction(() => window.__spaghettify.input.move.x === 0 && window.__spaghettify.input.move.y === 0);
+    await expect(page.getByTestId('joystick-base')).toBeHidden();
 
     // The pause button is a DOM button and takes a tap.
     await page.getByTestId('pause-button').tap();
@@ -1340,34 +1350,31 @@ test.describe('touch and gamepad', () => {
     expect(errors).toEqual([]);
   });
 
-  test('joystick: steers by drag from the touch-down point, shows a stick, and the choice persists', async ({ page }) => {
+  test('finger follow: chosen in the settings, the choice persists and the hole follows the finger', async ({ page }) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(e.message));
     await page.goto('/?bots=0');
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
     await page.getByTestId('title-settings').tap();
-    await page.getByTestId('control-scheme').selectOption('joystick');
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}').scheme)).toBe('joystick');
+    await page.getByTestId('control-scheme').selectOption('finger');
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('spaghettify.settings') ?? '{}').scheme)).toBe('finger');
     await page.getByTestId('settings-back').tap();
 
+    // A choice made now is kept (it is not the old default being moved to the joystick).
     await page.reload();
     await page.waitForFunction(() => window.__spaghettify?.frames > 5);
-    expect(await page.evaluate(() => window.__spaghettify.settings.scheme)).toBe('joystick');
+    expect(await page.evaluate(() => window.__spaghettify.settings.scheme)).toBe('finger');
     await page.getByTestId('play').tap();
     await page.waitForFunction(() => window.__spaghettify.mode === 'playing');
 
-    // Touch down left of centre without dragging: a finger-follow scheme would steer left, the joystick must not move.
-    const t = await touchStart(page, 120, 280);
-    await page.waitForTimeout(800);
-    expect(Math.abs(await page.evaluate(() => window.__spaghettify.player.position.x))).toBeLessThan(0.05);
-    await expect(page.getByTestId('joystick-base')).toBeVisible();
-
-    // Drag right: the hole moves right. Drag up: it moves toward screen up (-Z).
-    await t.move(200, 280);
+    // Finger to the right of centre: drift right. Lifting the finger stops the steering.
+    const t = await touchStart(page, 560, 180);
     await page.waitForFunction(() => window.__spaghettify.player.position.x > 0.5);
-    await t.move(120, 200);
-    await page.waitForFunction(() => window.__spaghettify.player.position.z < -0.5);
+    expect(await page.evaluate(() => window.__spaghettify.touch.touching)).toBe(true);
+    expect(await page.evaluate(() => window.__spaghettify.input.move.x)).toBeGreaterThan(0.5);
     await t.end();
+    await page.waitForFunction(() => !window.__spaghettify.touch.touching);
+    await page.waitForFunction(() => window.__spaghettify.input.move.x === 0 && window.__spaghettify.input.move.y === 0);
     await expect(page.getByTestId('joystick-base')).toBeHidden();
     expect(errors).toEqual([]);
   });

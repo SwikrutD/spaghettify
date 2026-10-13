@@ -58,38 +58,35 @@ What the api does:
    Optional: run the whole test suite against the container with
    `$env:BASE_URL='http://localhost:8095'; npm test` (PowerShell) or `BASE_URL=http://localhost:8095 npm test` (bash).
 
-## 1. Get the images onto TrueNAS
+## 1. Get the code onto TrueNAS and build the images
 
-The repo has no git remote, so the simplest path is to build on the PC and copy the images across.
-Both machines are x86-64, so the images run as is.
+The code goes to a GitHub repo (private is fine) and the NAS clones it and builds the images itself.
+Nothing is copied by hand.
+
+**On the PC, once:** create an empty repo on GitHub, then
+`git remote add origin https://github.com/<user>/spaghettify.git` and `git push -u origin main`.
+
+**Datasets** (TrueNAS web UI, Datasets > select the pool > Add Dataset, preset Generic): a dataset
+`spaghettify`, then a child dataset `leaderboard` inside it. The api runs as the `node` user (uid 1000)
+and must be able to write to the leaderboard one. Back it up with your usual snapshot task; it is one
+small SQLite file (plus `-wal` and `-shm` files while running).
+
+**Clone and build** (System > Shell, or SSH as admin). Here the pool is `raidmirror` and the datasets are
+under `Apps`; use your own path:
 
 ```
-docker compose build
-docker save spaghettify:latest spaghettify-api:latest -o spaghettify.tar
-```
-
-Copy `spaghettify.tar` to a TrueNAS share (for example `/mnt/<pool>/apps/spaghettify/`), then in
-TrueNAS: System > Shell (or SSH as admin):
-
-```
-sudo docker load -i /mnt/<pool>/apps/spaghettify/spaghettify.tar
+sudo chown 1000:1000 /mnt/raidmirror/Apps/spaghettify/leaderboard
+cd /mnt/raidmirror/Apps/spaghettify
+sudo git clone https://github.com/<user>/spaghettify.git repo      # public repo
+cd repo
+sudo docker compose build
 sudo docker image ls | grep spaghettify
 ```
 
-**The leaderboard database.** Create a dataset for it, for example `<pool>/apps/spaghettify/leaderboard`
-(Datasets > Add Dataset, preset Apps or Generic). The api runs as the `node` user (uid 1000) and must be
-able to write there:
-
-```
-sudo chown 1000:1000 /mnt/<pool>/apps/spaghettify/leaderboard
-```
-
-Back it up with your usual snapshot task; it is one small SQLite file (plus `-wal` and `-shm` files
-while running).
-
-(Alternative: copy the repo without `node_modules`, `server/node_modules` and `dist` to the dataset and run
-`sudo docker compose build` there. Later, if the repo goes to GitHub, a GitHub Actions
-workflow can push to ghcr.io and TrueNAS can pull it; that is not set up.)
+For a private repo, create a fine-grained GitHub token (Settings > Developer settings > Personal access
+tokens > Fine-grained) limited to this repo with Contents read-only, and clone with
+`https://<user>:<TOKEN>@github.com/<user>/spaghettify.git`. The first build takes several minutes on the
+i3. It leaves `spaghettify:latest` and `spaghettify-api:latest`.
 
 ## 2. Create the TrueNAS app
 
@@ -193,9 +190,16 @@ them).
 
 ## Updating
 
-On the PC: commit, `docker compose build`, `docker save spaghettify:latest spaghettify-api:latest -o spaghettify.tar`.
-On TrueNAS: `sudo docker load -i .../spaghettify.tar`, then Apps > spaghettify > Stop, then Start
-so both containers pick up the new images. The leaderboard survives updates (it lives on the dataset).
+On the PC: commit and `git push`.
+On TrueNAS:
+
+```
+cd /mnt/<pool>/Apps/spaghettify/repo
+sudo git pull
+sudo docker compose build
+```
+
+Then Apps > spaghettify > Stop, then Start so both containers pick up the new images. The leaderboard survives updates (it lives on the dataset).
 
 **Moderating the board.** There is no admin UI. To remove a nickname (all its runs):
 

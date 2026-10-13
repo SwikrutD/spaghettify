@@ -136,6 +136,27 @@ export const PREY = {
 } as const;
 
 /**
+ * Procedural surfaces of the round bodies (src/shaders/preySurface.pars.frag.glsl), drawn on the body's own sphere
+ * so they turn with it and stretch with it when it spaghettifies. Render only (not part of the rules).
+ */
+export const SURFACE = {
+  /**
+   * Surface per round class, by class name: 1 icy dwarf planet (bright and dark plains, craters), 2 moon (craters
+   * and dark maria), 3 rocky planet (terrain, polar caps), 4 ice giant (faint bands, a dark spot on some), 5 gas
+   * giant (belts and zones, a storm oval on some). Anything else is plain.
+   */
+  kinds: { 'dwarf planet': 1, moon: 2, 'rocky planet': 3, 'ice giant': 4, 'gas giant': 5 } as Readonly<Record<string, number>>,
+  /** Round bodies spin about their own pole at up to this many rad/s (the rocks tumble at PREY.spinSpeed). */
+  spinSpeed: 0.25,
+  /**
+   * The pole points up the screen, tipped at random by up to `roll` radians in the screen plane and `nod` toward or
+   * away from the camera, so bands run across the screen as in a photo and some poles show.
+   */
+  roll: 0.45,
+  nod: 0.35,
+} as const;
+
+/**
  * Dangers: bodies the hole cannot eat pull it toward them and hurt it on contact. Comets (the roaming
  * hazard) are in COMETS. Pull strength is a fraction of the hole's
  * steering authority (PLAYER.responsiveness x current top speed), so it feels the same at every size.
@@ -681,8 +702,10 @@ export const MENU = {
   /** Also enforced by the leaderboard server (shared rules in src/leaderboard/rules.ts). */
   nicknameMaxLength: 16,
   defaultScheme: 'mouse',
-  /** Scheme picked on a touch-first device when nothing is stored yet. */
-  defaultTouchScheme: 'finger',
+  /** Scheme picked on a touch-first device when nothing is stored yet (the virtual joystick since the M22 phone playtest). */
+  defaultTouchScheme: 'joystick',
+  /** Show the players in the room on the online status line (a setting; the title never shows a count). */
+  showPlayersDefault: false,
 } as const;
 
 /**

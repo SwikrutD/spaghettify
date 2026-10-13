@@ -21,8 +21,8 @@ export function saveBest(score: number): void {
 }
 
 /**
- * Title screen: name, best score, nickname entry, play, settings and the online status (players online, or the
- * offline arena). Shown before the first run and after quitting a run.
+ * Title screen: name, best score, nickname entry, play, settings and a line when the game will play the offline
+ * arena (no player count). Shown before the first run and after quitting a run.
  */
 export class TitleScreen {
   onPlay: (() => void) | null = null;
@@ -117,7 +117,7 @@ export class TitleScreen {
     return this.visible;
   }
 
-  /** The line under Play: players online, or that the game plays the offline arena. */
+  /** The line under Play: empty, or that the game plays the offline arena. */
   setOnline(text: string): void {
     this.online.textContent = text;
   }
